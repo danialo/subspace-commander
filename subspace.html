@@ -1575,9 +1575,14 @@
                 // If the sprite hasn't loaded yet, bail out
                 if (!this.shipLoaded || !this.processedShipCanvas) return false;
 
-                // Convert rotation to frame index (0–35). Ensure the angle is within 0–2π.
-                const normalized = (angle % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-                const frameIndex = Math.round(normalized / (2 * Math.PI) * this.rotationFrames) % this.rotationFrames;
+                // Subspace rotation starts with ship pointing up (angle 0 = north)
+                // and goes clockwise. Adjust angle to match sprite sheet orientation.
+                const adjustedAngle = angle + Math.PI / 2; // Rotate by 90 degrees to match sprite orientation
+                const normalized = (adjustedAngle % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+
+                // Convert to frame index (0-35) with better precision
+                const frameFloat = (normalized / (2 * Math.PI)) * this.rotationFrames;
+                const frameIndex = Math.floor(frameFloat) % this.rotationFrames;
 
                 // Column (0–8) and row (0–3) within one ship's grid
                 const col = frameIndex % 9;
