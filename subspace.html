@@ -139,7 +139,7 @@
             <div>Deaths: <span id="deaths">0</span></div>
             <div style="margin-top: 10px; border-top: 1px solid #0ff; padding-top: 5px;">
                 <div style="font-size: 10px; color: #aaa;">SHIP & UPGRADES:</div>
-                <div>Ship: <button onclick="window.game.changeShip(-1)" style="background: #0ff; color: #000; border: none; padding: 2px 6px;">◀</button> <span id="shipType">1</span> <button onclick="window.game.changeShip(1)" style="background: #0ff; color: #000; border: none; padding: 2px 6px;">▶</button></div>
+                <div>Ship: <button onclick="window.game.changeShip(-1)" style="background: #0ff; color: #000; border: none; padding: 2px 6px;">◀</button> <span id="shipType">Warbird</span> <button onclick="window.game.changeShip(1)" style="background: #0ff; color: #000; border: none; padding: 2px 6px;">▶</button></div>
                 <div>Energy: Lv.<span id="energyLevel">0</span> (Max: <span id="maxEnergy">1100</span>)</div>
                 <div>Speed: Lv.<span id="speedLevel">0</span> (Max: <span id="maxSpeed">500</span>)</div>
                 <div>Guns: <span id="bulletType">Red</span></div>
@@ -272,7 +272,7 @@
                 this.burstTimeoutDefault = 2.0; // Burst cooldown is 2 seconds
                 this.energyRecharge = 50; // Energy recharge rate per second
 
-                this.size = 24; // Larger ship
+                this.size = 18; // Reasonable triangle size
                 this.bullets = [];
 
                 // Permanent upgrade levels (reset on death)
@@ -301,7 +301,7 @@
 
                 // Graphics - use Subspace sprites
                 this.shipType = isPlayer ? 1 : Math.floor(Math.random() * 8) + 1; // Ship types 1-8
-                this.spriteDrawSize = 32; // Draw at original size
+                this.spriteDrawSize = 48; // Draw 50% larger
                 this.spriteSize = 32; // For compatibility
             }
 
@@ -613,19 +613,22 @@
                 // Move to ship center
                 ctx.translate(screenPos.x, screenPos.y);
 
-                // Rotate by current angle
-                ctx.rotate(this.angle);
-
-                // Try to draw Subspace sprite first
-                const spriteName = `ship${this.shipType}`;
+                // Don't rotate canvas - the sprite frames are already rotated
+                // (Only rotate if we need to draw fallback triangle)
+                // Try to draw ship sprite
                 let spriteDrawn = false;
 
-                if (window.game && window.game.skinLoaded && window.game.drawSprite) {
+                if (window.game && window.game.shipLoaded && window.game.drawShipSprite) {
                     try {
-                        spriteDrawn = window.game.drawSprite(spriteName, 0, 0, 0);
+                        spriteDrawn = window.game.drawShipSprite(this.shipType, 0, 0, this.angle);
                     } catch (e) {
-                        console.log('Sprite drawing failed:', e);
+                        console.log('Ship sprite drawing failed:', e);
                     }
+                }
+
+                // If sprite failed, apply rotation for fallback triangle
+                if (!spriteDrawn) {
+                    ctx.rotate(this.angle);
                 }
 
                 if (!spriteDrawn) {
@@ -1199,26 +1202,24 @@
                 this.ctx.webkitImageSmoothingEnabled = false;
                 this.ctx.msImageSmoothingEnabled = false;
 
-                // Load Subspace skin sprite sheet
-                this.skinImage = new Image();
-                this.skinLoaded = false;
-                this.skinImage.onload = () => {
-                    this.skinLoaded = true;
-                    console.log('Subspace skin loaded successfully');
+                // Load simple ship sprite (like Valor does)
+                this.shipImage = new Image();
+                this.shipLoaded = false;
+                this.shipImage.onload = () => {
+                    this.shipLoaded = true;
+                    console.log('Ship sprite loaded successfully');
                 };
-                this.skinImage.src = 'skin.bmp';
+                this.shipImage.src = 'ship2.png'; // Use the existing simple ship image
 
-                // Subspace sprite coordinates (from SkinExample.txt)
-                this.sprites = {
-                    // Ships (from skin coordinates)
-                    ship1: { x: 56, y: 224, width: 39, height: 39 },
-                    ship2: { x: 104, y: 224, width: 39, height: 39 },
-                    ship3: { x: 152, y: 224, width: 39, height: 39 },
-                    ship4: { x: 200, y: 224, width: 39, height: 39 },
-                    ship5: { x: 32, y: 264, width: 39, height: 39 },
-                    ship6: { x: 80, y: 264, width: 39, height: 39 },
-                    ship7: { x: 128, y: 264, width: 39, height: 39 },
-                    ship8: { x: 176, y: 264, width: 39, height: 39 }
+                // Simple ship config - one ship type, 36 rotation frames in a grid
+                // Use correct grid dimensions but sample from center of each frame
+                this.shipFrameWidth = 40;   // 360 ÷ 9 = 40 (correct grid)
+                this.shipFrameHeight = 36;  // 144 ÷ 4 = 36 (correct grid)
+                this.rotationFrames = 36;   // Total number of rotation frames (9×4)
+
+                // Keep a simple ship types object for the HUD
+                this.shipTypes = {
+                    1: { name: 'Warbird' }
                 };
 
                 // Game state
@@ -1540,27 +1541,9 @@
                 }
             }
 
-            drawSprite(spriteName, x, y, rotation = 0) {
-                if (!this.skinLoaded || !this.sprites[spriteName]) return false;
-
-                const sprite = this.sprites[spriteName];
-                const ctx = this.ctx;
-
-                ctx.save();
-                ctx.translate(x, y);
-                ctx.rotate(rotation);
-
-                // Debug: Set the background fill for non-transparent pixels
-                ctx.globalCompositeOperation = 'source-over';
-
-                ctx.drawImage(
-                    this.skinImage,
-                    sprite.x, sprite.y, sprite.width, sprite.height,
-                    -sprite.width / 2, -sprite.height / 2, sprite.width, sprite.height
-                );
-
-                ctx.restore();
-                return true;
+            drawShipSprite(shipType, x, y, angle) {
+                // DISABLE SPRITES - just return false to use triangle
+                return false;
             }
 
             changeShip(direction) {
@@ -1570,7 +1553,8 @@
                 if (this.playerShip.shipType > 8) this.playerShip.shipType = 1;
 
                 // Update the HUD display
-                document.getElementById('shipType').textContent = this.playerShip.shipType;
+                const shipName = this.shipTypes[this.playerShip.shipType]?.name || 'Unknown';
+                document.getElementById('shipType').textContent = shipName;
 
                 // Send ship change to multiplayer if connected
                 if (this.isMultiplayer && this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -1718,7 +1702,8 @@
                 document.getElementById('deaths').textContent = ship.deaths;
 
                 // Upgrade levels and their effects
-                document.getElementById('shipType').textContent = ship.shipType;
+                const shipName = this.shipTypes[ship.shipType]?.name || 'Unknown';
+                document.getElementById('shipType').textContent = shipName;
                 document.getElementById('energyLevel').textContent = ship.energyLevel;
                 document.getElementById('speedLevel').textContent = ship.maxSpeedLevel;
                 document.getElementById('maxSpeed').textContent = Math.floor(ship.maxSpeed);
@@ -1736,6 +1721,9 @@
             }
 
             draw() {
+                // Debug: Log drawing info
+                console.log(`Drawing: canvas ${this.canvas.width}x${this.canvas.height}, player at (${this.playerShip.pos.x}, ${this.playerShip.pos.y})`);
+
                 // Update viewport to follow player
                 this.viewport.follow(this.playerShip);
 
@@ -1938,6 +1926,11 @@
             gameLoop(currentTime = 0) {
                 const deltaTime = (currentTime - this.lastTime) / 1000; // Convert to seconds
                 this.lastTime = currentTime;
+
+                // Debug: Log first few frames
+                if (currentTime < 5000) {
+                    console.log(`Frame ${Math.floor(currentTime)}: playerShip at (${this.playerShip.pos.x}, ${this.playerShip.pos.y})`);
+                }
 
                 if (this.running && deltaTime < 0.1) { // Cap deltaTime to prevent large jumps
                     // Update player ship
