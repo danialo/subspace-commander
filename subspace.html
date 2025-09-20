@@ -1205,21 +1205,51 @@
                 // Load simple ship sprite (like Valor does)
                 this.shipImage = new Image();
                 this.shipLoaded = false;
+                this.processedShipCanvas = null;
                 this.shipImage.onload = () => {
+                    // Create an offscreen canvas the same size as shipImage
+                    const off = document.createElement('canvas');
+                    off.width = this.shipImage.width;
+                    off.height = this.shipImage.height;
+                    const offCtx = off.getContext('2d');
+
+                    // Draw the sprite sheet into it
+                    offCtx.drawImage(this.shipImage, 0, 0);
+
+                    // Access pixel data and make black pixels transparent
+                    const imgData = offCtx.getImageData(0, 0, off.width, off.height);
+                    const data = imgData.data;
+                    for (let i = 0; i < data.length; i += 4) {
+                        const r = data[i], g = data[i + 1], b = data[i + 2];
+                        // treat very dark pixels as transparent
+                        if (r < 16 && g < 16 && b < 16) {
+                            data[i + 3] = 0;
+                        }
+                    }
+                    offCtx.putImageData(imgData, 0, 0);
+
+                    // Use the processed canvas as the sprite source
+                    this.processedShipCanvas = off;
                     this.shipLoaded = true;
-                    console.log('Ship sprite loaded successfully');
+                    console.log('Processed ship sprite loaded successfully');
                 };
-                this.shipImage.src = 'ship2.png'; // Use the existing simple ship image
+                this.shipImage.src = 'ships.png'; // Use the full 8-ship sprite sheet
 
-                // Simple ship config - one ship type, 36 rotation frames in a grid
-                // Use correct grid dimensions but sample from center of each frame
-                this.shipFrameWidth = 40;   // 360 ÷ 9 = 40 (correct grid)
-                this.shipFrameHeight = 36;  // 144 ÷ 4 = 36 (correct grid)
-                this.rotationFrames = 36;   // Total number of rotation frames (9×4)
+                // Ship config for 8 ship types, 36 rotation frames per ship in a grid
+                this.shipFrameWidth = 40;   // Each frame is 40px wide
+                this.shipFrameHeight = 36;  // Each frame is 36px tall
+                this.rotationFrames = 36;   // 9 columns × 4 rows = 36 rotation frames per ship
 
-                // Keep a simple ship types object for the HUD
+                // Ship types for the HUD
                 this.shipTypes = {
-                    1: { name: 'Warbird' }
+                    1: { name: 'Warbird' },
+                    2: { name: 'Javelin' },
+                    3: { name: 'Spider' },
+                    4: { name: 'Leviathan' },
+                    5: { name: 'Terrier' },
+                    6: { name: 'Weasel' },
+                    7: { name: 'Lancaster' },
+                    8: { name: 'Shark' }
                 };
 
                 // Game state
@@ -1542,8 +1572,37 @@
             }
 
             drawShipSprite(shipType, x, y, angle) {
-                // DISABLE SPRITES - just return false to use triangle
-                return false;
+                // If the sprite hasn't loaded yet, bail out
+                if (!this.shipLoaded || !this.processedShipCanvas) return false;
+
+                // Convert rotation to frame index (0–35). Ensure the angle is within 0–2π.
+                const normalized = (angle % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+                const frameIndex = Math.round(normalized / (2 * Math.PI) * this.rotationFrames) % this.rotationFrames;
+
+                // Column (0–8) and row (0–3) within one ship's grid
+                const col = frameIndex % 9;
+                const row = Math.floor(frameIndex / 9);
+
+                // Offset to the correct ship type (each type occupies 4 rows of frames)
+                const baseY = (shipType - 1) * 4 * this.shipFrameHeight;
+
+                // Sample the central 32×32 pixels of each 40×36 frame
+                const srcX = col * this.shipFrameWidth + 4; // (40 – 32)/2
+                const srcY = baseY + row * this.shipFrameHeight + 2; // (36 – 32)/2
+                const srcSize = 32;
+
+                // Destination size (Ship.spriteDrawSize is 48)
+                const destSize = this.playerShip.spriteDrawSize;
+
+                // Draw onto the main canvas at (x,y) relative to the translated origin
+                this.ctx.drawImage(
+                    this.processedShipCanvas,
+                    srcX, srcY, srcSize, srcSize, // Source
+                    x - destSize / 2, y - destSize / 2,
+                    destSize, destSize              // Destination
+                );
+
+                return true; // prevent fallback triangle
             }
 
             changeShip(direction) {
