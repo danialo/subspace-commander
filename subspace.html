@@ -310,7 +310,7 @@
                 const baseMaxSpeed = 17; // 17 pixels/second base speed (15 * 1.15 ≈ 17)
                 const baseFireEnergy = 20;
                 const baseEnergyRecharge = 50;
-                const baseThrustMultiplier = 0.05; // Responsive but not overwhelming thrust (5% instead of 1%)
+                const baseThrustMultiplier = 10; // Dramatically increased thrust multiplier for responsiveness
                 const baseMaxShield = 0;
                 const baseMaxEnergy = 1100; // Base energy, upgradeable to 2100
 
@@ -397,15 +397,13 @@
                 this.rawAngle = this.angle;
 
                 // Thrust (reduced base acceleration, can be boosted by power-ups)
-                const baseThrustForce = 25; // Balanced thrust force
+                const baseThrustForce = 75; // Increased thrust force by 50% (50 * 1.5 = 75)
                 const thrustForce = baseThrustForce * this.thrustMultiplier * deltaTime;
                 if (input.thrust) {
                     this.vel.addPolar(thrustForce, this.angle);
-                    this.vel.clamp(this.maxSpeed); // Clamp immediately after thrust
                 }
                 if (input.reverse) {
                     this.vel.addPolar(-thrustForce * 0.5, this.angle);
-                    this.vel.clamp(this.maxSpeed); // Clamp immediately after reverse thrust
                 }
 
                 // Brake
@@ -565,8 +563,8 @@
                 // Apply velocity limits
                 this.vel.clamp(this.maxSpeed);
 
-                // Update position
-                this.pos.add(this.vel);
+                // Update position (apply velocity scaled by deltaTime for proper units)
+                this.pos.add(new Vector2D(this.vel.x * deltaTime, this.vel.y * deltaTime));
 
                 // Check for death conditions
                 if (this.pos.x < -100 || this.pos.x > 8100 || this.pos.y < -100 || this.pos.y > 6100 || this.energy <= 0) {
@@ -1785,8 +1783,8 @@
             }
 
             draw() {
-                // Debug: Log drawing info
-                console.log(`Drawing: canvas ${this.canvas.width}x${this.canvas.height}, player at (${this.playerShip.pos.x}, ${this.playerShip.pos.y})`);
+                // Debug: Log drawing info (commented out to reduce spam)
+                // console.log(`Drawing: canvas ${this.canvas.width}x${this.canvas.height}, player at (${this.playerShip.pos.x}, ${this.playerShip.pos.y})`);
 
                 // Update viewport to follow player
                 this.viewport.follow(this.playerShip);
