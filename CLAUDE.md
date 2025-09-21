@@ -1,0 +1,3 @@
+- The game should be made to work at https://<ip>/subspace.html
+- There is a node.js server for this project.
+- There is a node.js for this project. No need to create another web server unless it's explicitly for testing or something, but we should probbaly use node.js where possible.

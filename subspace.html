@@ -731,8 +731,23 @@
 
                 // Clamp ship to world boundaries (8000 x 6000)
                 const margin = this.size; // Ship's collision radius
+                const oldX = this.pos.x;
+                const oldY = this.pos.y;
                 this.pos.x = Math.max(margin, Math.min(8000 - margin, this.pos.x));
                 this.pos.y = Math.max(margin, Math.min(6000 - margin, this.pos.y));
+
+                // Stop velocity when hitting boundaries to prevent visual issues
+                if (oldX !== this.pos.x) {
+                    this.vel.x = 0;
+                }
+                if (oldY !== this.pos.y) {
+                    this.vel.y = 0;
+                }
+
+                // Debug: Log when clamping occurs
+                if (oldX !== this.pos.x || oldY !== this.pos.y) {
+                    console.log(`Ship clamped: (${oldX.toFixed(1)}, ${oldY.toFixed(1)}) -> (${this.pos.x.toFixed(1)}, ${this.pos.y.toFixed(1)})`);
+                }
 
                 // Check for death conditions (only energy-based now, position is clamped)
                 if (this.energy <= 0) {
@@ -1475,9 +1490,19 @@
                 this.x = entity.pos.x;
                 this.y = entity.pos.y;
 
-                // Keep viewport within world bounds
-                this.x = Math.max(this.width / 2, Math.min(this.worldWidth - this.width / 2, this.x));
-                this.y = Math.max(this.height / 2, Math.min(this.worldHeight - this.height / 2, this.y));
+                // Keep viewport within world bounds, but prioritize showing the entity
+                // If world is smaller than viewport, center the world in viewport
+                if (this.worldWidth < this.width) {
+                    this.x = this.worldWidth / 2;
+                } else {
+                    this.x = Math.max(this.width / 2, Math.min(this.worldWidth - this.width / 2, this.x));
+                }
+
+                if (this.worldHeight < this.height) {
+                    this.y = this.worldHeight / 2;
+                } else {
+                    this.y = Math.max(this.height / 2, Math.min(this.worldHeight - this.height / 2, this.y));
+                }
             }
 
             worldToScreen(worldX, worldY) {
