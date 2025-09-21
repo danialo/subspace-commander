@@ -397,13 +397,15 @@
                 this.rawAngle = this.angle;
 
                 // Thrust (reduced base acceleration, can be boosted by power-ups)
-                const baseThrustForce = 40; // Slightly increased thrust force for better feel
+                const baseThrustForce = 25; // Balanced thrust force
                 const thrustForce = baseThrustForce * this.thrustMultiplier * deltaTime;
                 if (input.thrust) {
                     this.vel.addPolar(thrustForce, this.angle);
+                    this.vel.clamp(this.maxSpeed); // Clamp immediately after thrust
                 }
                 if (input.reverse) {
                     this.vel.addPolar(-thrustForce * 0.5, this.angle);
+                    this.vel.clamp(this.maxSpeed); // Clamp immediately after reverse thrust
                 }
 
                 // Brake
