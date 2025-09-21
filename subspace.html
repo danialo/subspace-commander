@@ -1575,37 +1575,36 @@
                 // If the sprite hasn't loaded yet, bail out
                 if (!this.shipLoaded || !this.processedShipCanvas) return false;
 
-                // Convert ship angle to frame index (0-35)
-                // Normalize angle to 0-2π range
-                const normalizedAngle = ((angle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-
-                // Convert to frame index - use Math.round for smoother transitions
-                const frameIndex = Math.round((normalizedAngle / (2 * Math.PI)) * this.rotationFrames) % this.rotationFrames;
-
-                // Column (0–8) and row (0–3) within one ship's grid
-                const col = frameIndex % 9;
-                const row = Math.floor(frameIndex / 9);
+                // Use the first frame (upright) and rotate with canvas transform
+                const baseCol = 0;
+                const baseRow = 0;
 
                 // Offset to the correct ship type (each type occupies 4 rows of frames)
                 const baseY = (shipType - 1) * 4 * this.shipFrameHeight;
 
-                // Use full frame size
-                const srcX = col * this.shipFrameWidth;
-                const srcY = baseY + row * this.shipFrameHeight;
-                const srcWidth = this.shipFrameWidth;
-                const srcHeight = this.shipFrameHeight;
+                // Sample the central 32×32 pixels of that frame
+                const srcX = baseCol * this.shipFrameWidth + 4;
+                const srcY = baseY + baseRow * this.shipFrameHeight + 2;
+                const srcW = 32;
+                const srcH = 32;
 
-                // Destination size
-                const destSize = 48;
+                const dest = this.playerShip.spriteDrawSize;
 
-                // Draw onto the main canvas at (x,y) relative to the translated origin
+                this.ctx.save();
+
+                // Move to ship center, then rotate around the ship's centre
+                this.ctx.translate(x, y);
+                this.ctx.rotate(angle);
+
+                // Draw the upright ship rotated
                 this.ctx.drawImage(
                     this.processedShipCanvas,
-                    srcX, srcY, srcWidth, srcHeight, // Source
-                    x - destSize / 2, y - destSize / 2,
-                    destSize, destSize              // Destination
+                    srcX, srcY, srcW, srcH,
+                    -dest / 2, -dest / 2,
+                    dest, dest
                 );
 
+                this.ctx.restore();
                 return true; // prevent fallback triangle
             }
 
