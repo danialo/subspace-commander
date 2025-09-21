@@ -263,7 +263,7 @@
                 this.isPlayer = isPlayer;
 
                 // Ship properties (from valor)
-                this.maxSpeed = 1; // pixels/second, extremely slow base speed
+                this.maxSpeed = 17; // pixels/second, will be recalculated in updateStatsFromLevels()
                 // Energy will be set after updateStatsFromLevels() is called
                 this.fireEnergy = 20;
                 this.gunTimeoutDefault = 0.5; // seconds
@@ -306,16 +306,16 @@
             }
 
             updateStatsFromLevels() {
-                // Base stats
-                const baseMaxSpeed = 150;
+                // Base stats (proper Subspace feel)
+                const baseMaxSpeed = 17; // 17 pixels/second base speed (15 * 1.15 ≈ 17)
                 const baseFireEnergy = 20;
                 const baseEnergyRecharge = 50;
-                const baseThrustMultiplier = 0.01; // Start with very slow thrust (1% of normal)
+                const baseThrustMultiplier = 0.05; // Responsive but not overwhelming thrust (5% instead of 1%)
                 const baseMaxShield = 0;
                 const baseMaxEnergy = 1100; // Base energy, upgradeable to 2100
 
                 // Calculate current stats from upgrade levels
-                this.maxSpeed = baseMaxSpeed + (this.maxSpeedLevel * 50);
+                this.maxSpeed = baseMaxSpeed + (this.maxSpeedLevel * 5); // +5 pixels/sec per level
                 this.maxEnergy = baseMaxEnergy + (this.energyLevel * 200); // +200 per level, max 2100
 
                 // Fire energy increases with bullet upgrades (100% per level)
@@ -325,7 +325,7 @@
                 const baseBulletCost = 67;
                 this.fireEnergy = baseBulletCost * (1 + this.weaponLevel * 1.0);
                 this.energyRecharge = baseEnergyRecharge * (1 + this.rechargeLevel * 2.0); // Much higher scaling for infinite green bullets
-                this.thrustMultiplier = baseThrustMultiplier * (1 + this.thrustLevel * 0.02); // +2% per level
+                this.thrustMultiplier = baseThrustMultiplier * (1 + this.thrustLevel * 0.02); // +2% per level - ORIGINAL VALUE
                 this.maxShield = baseMaxShield + (this.shieldLevel * 25);
 
                 // Determine bullet type based on weapon level
@@ -397,7 +397,7 @@
                 this.rawAngle = this.angle;
 
                 // Thrust (reduced base acceleration, can be boosted by power-ups)
-                const baseThrustForce = 200; // Base thrust force
+                const baseThrustForce = 40; // Slightly increased thrust force for better feel
                 const thrustForce = baseThrustForce * this.thrustMultiplier * deltaTime;
                 if (input.thrust) {
                     this.vel.addPolar(thrustForce, this.angle);
