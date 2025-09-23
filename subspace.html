@@ -1645,9 +1645,8 @@
                 this.safeZone = {
                     x: this.viewport.worldWidth / 2,
                     y: this.viewport.worldHeight / 2,
-                    radius: 500
+                    radius: 250
                 };
-                // #TODO: Circle back once QA verifies multiplayer positions stay tight after long idle sessions.
                 this.lastBroadcastState = {
                     time: 0,
                     x: null,
@@ -2013,8 +2012,7 @@
             }
 
             damagePlayer(bulletLevel, attackerId = null) {
-                const damageLevels = [110, 120, 130, 140, 150, 160];
-                const damage = damageLevels[Math.min(bulletLevel, 5)] || damageLevels[0];
+                const damage = this.getBulletDamage(Math.min(Math.max(bulletLevel, 0), 5));
 
                 console.log(`Hit by level ${bulletLevel} bullet for ${damage} damage`);
                 this.applyDamageToPlayerShip(damage, {
@@ -2042,6 +2040,53 @@
                 };
 
                 this.sendMultiplayerMessage(payload);
+            }
+
+            getBulletDamage(level) {
+                const damageLevels = [110, 120, 130, 140, 150, 160];
+                const clampedIndex = Math.max(0, Math.min(level, damageLevels.length - 1));
+                return damageLevels[clampedIndex];
+            }
+
+            handleBulletSelfDamage(bullet, targetShip) {
+                if (!bullet) {
+                    return;
+                }
+
+                const ownerId = bullet.ownerId;
+                const isLocalOwner = ownerId === this.playerId || ownerId === 'local';
+                if (!isLocalOwner) {
+                    return;
+                }
+
+                const shooterShip = this.playerShip;
+                if (!shooterShip || !targetShip) {
+                    return;
+                }
+
+                const dx = shooterShip.pos.x - targetShip.pos.x;
+                const dy = shooterShip.pos.y - targetShip.pos.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                const shooterRadius = shooterShip.hitRadius !== undefined ? shooterShip.hitRadius : shooterShip.size;
+                const targetRadius = targetShip.hitRadius !== undefined ? targetShip.hitRadius : targetShip.size;
+                const proximityThreshold = shooterRadius + targetRadius + 40;
+
+                if (distance > proximityThreshold) {
+                    return;
+                }
+
+                const bulletLevel = bullet.weaponLevel || bullet.upgradeLevel || 0;
+                const damage = this.getBulletDamage(bulletLevel);
+
+                this.applyDamageToPlayerShip(damage, {
+                    attackerId: ownerId,
+                    weapon: 'bullet',
+                    metadata: {
+                        bulletLevel: bulletLevel,
+                        selfInflicted: true,
+                        proximityDistance: Math.round(distance)
+                    }
+                });
             }
 
             handlePlayerDeath(killerInfo) {
@@ -2516,8 +2561,7 @@
                 document.getElementById('bulletBounce').textContent = bounceText;
 
                 // Show bullet damage for 6-level system
-                const damageLevels = [110, 120, 130, 140, 150, 160];
-                const currentDamage = damageLevels[Math.min(ship.weaponLevel, 5)] || damageLevels[0];
+                const currentDamage = this.getBulletDamage(Math.min(Math.max(ship.weaponLevel, 0), 5));
                 document.getElementById('bulletDamage').textContent = currentDamage;
                 document.getElementById('bombType').textContent = ship.bulletType.charAt(0).toUpperCase() + ship.bulletType.slice(1);
                 document.getElementById('rechargeLevel').textContent = ship.rechargeLevel;
@@ -2985,6 +3029,7 @@
                             // Check collision with other multiplayer players
                             for (const [playerId, otherPlayer] of this.otherPlayers) {
                                 if (this.checkBulletPlayerCollision(bullet, otherPlayer)) {
+                                    this.handleBulletSelfDamage(bullet, otherPlayer);
                                     // Send damage to other player via server
                                     this.sendPlayerDamage(playerId, bullet);
                                     ship.bullets.splice(i, 1);
