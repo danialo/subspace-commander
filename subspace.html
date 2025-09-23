@@ -175,7 +175,7 @@
 
         <div class="hud">
             <div>Energy: <span id="energy">1100</span> / <span id="maxEnergy">1100</span></div>
-            <div>Shield: <span id="shield">0</span> / <span id="maxShield">0</span></div>
+            <div>Shield: <span id="shieldStatus">Inactive</span></div>
             <div>Bounty: <span id="powerUps">0</span></div>
             <div>Walls: <span id="wallCount">0</span></div>
             <div>Deaths: <span id="deaths">0</span></div>
@@ -189,7 +189,6 @@
                 <div>Recharge: Lv.<span id="rechargeLevel">0</span> (+<span id="rechargeRate">0</span>%)</div>
                 <div>Thrust: Lv.<span id="thrustLevel">0</span> (+<span id="thrustBonus">0</span>%)</div>
                 <div>Rotation: Lv.<span id="rotationLevel">0</span> (+<span id="rotationBonus">0</span>%)</div>
-                <div>Shield: Lv.<span id="shieldLevel">0</span></div>
             </div>
         </div>
 
@@ -247,11 +246,6 @@
             <div class="config-slider">
                 <label>Rotation Level <span class="value" id="rotationLevelValue">0</span></label>
                 <input type="range" id="rotationLevelSlider" min="0" max="3" step="1" value="0">
-            </div>
-
-            <div class="config-slider">
-                <label>Shield Level <span class="value" id="shieldLevelValue">0</span></label>
-                <input type="range" id="shieldLevelSlider" min="0" max="10" step="1" value="0">
             </div>
 
             <div class="config-slider">
@@ -409,12 +403,15 @@
 
         // Ship class (based on valor's Ship.coffee)
         class Ship {
-            constructor(x, y, isPlayer = false) {
+            constructor(x, y, isPlayer = false, shipTypeOverride = null) {
                 this.pos = new Vector2D(x, y);
                 this.vel = new Vector2D(0, 0);
                 this.rawAngle = 0;
                 this.angle = 0;
                 this.isPlayer = isPlayer;
+
+                const defaultShipType = isPlayer ? 1 : Math.floor(Math.random() * 8) + 1;
+                this.shipType = shipTypeOverride != null ? shipTypeOverride : defaultShipType; // Ship types 1-8
 
                 // Ship properties (from valor)
                 this.maxSpeed = 150; // pixels/second, will be recalculated in updateStatsFromLevels()
@@ -430,18 +427,19 @@
                 this.energyRecharge = 50; // Energy recharge rate per second
 
                 this.size = 18; // Reasonable triangle size
+                this.hitRadius = this.size * 0.9; // Slightly smaller collision radius for ship hitbox
                 this.bullets = [];
 
                 // Permanent upgrade levels (reset on death)
-                this.shield = 0;
                 this.maxSpeedLevel = 0; // +50 max speed per level
                 this.weaponLevel = 0; // Bullet progression: 0=red, 1=yellow, 2=green
                 this.rechargeLevel = 0; // +200% recharge rate per level
                 this.thrustLevel = 0; // +2% thrust per level
-                this.shieldLevel = 0; // +25 max shield per level
                 this.energyLevel = 0; // +200 max energy per level
                 this.rotationLevel = 0; // +33% turn rate per level
                 this.wallCount = 0; // Number of deployable walls
+                this.shieldActive = false;
+                this.shieldTimer = 0;
 
                 // Calculate current stats based on levels
                 this.updateStatsFromLevels();
@@ -458,7 +456,6 @@
                 this.invmass = 1.0;
 
                 // Graphics - use Subspace sprites
-                this.shipType = isPlayer ? 1 : Math.floor(Math.random() * 8) + 1; // Ship types 1-8
                 this.spriteDrawSize = 48; // Draw 50% larger
                 this.spriteSize = 32; // For compatibility
             }
@@ -469,11 +466,10 @@
 
                 // Base stats (proper Subspace feel) - now configurable
                 const baseMaxSpeed = 150 * config.baseSpeedMultiplier;
-                const baseFireEnergy = 20;
                 const baseEnergyRecharge = 50 * config.energyRechargeMultiplier;
                 const baseThrustMultiplier = 5 * config.thrustMultiplier;
-                const baseMaxShield = 0;
                 const baseMaxEnergy = 1100 * config.energyCapacityMultiplier;
+                const baseGunTimeout = 0.5;
 
                 // Calculate current stats from upgrade levels
                 this.maxSpeed = baseMaxSpeed + (this.maxSpeedLevel * 5 * config.baseSpeedMultiplier);
@@ -485,7 +481,7 @@
                 this.fireEnergy = energyCosts[Math.min(this.weaponLevel, 5)] || baseBulletCost;
                 this.energyRecharge = baseEnergyRecharge * (1 + this.rechargeLevel * 2.0); // Much higher scaling for infinite green bullets
                 this.thrustMultiplier = baseThrustMultiplier * (1 + this.thrustLevel * 0.02); // +2% per level - ORIGINAL VALUE
-                this.maxShield = baseMaxShield + (this.shieldLevel * 25);
+                this.gunTimeoutDefault = baseGunTimeout * (config.gunTimeoutMultiplier || 1.0);
 
                 // Determine bullet type name for HUD display (6 levels)
                 const bulletNames = ['Red', 'Red+', 'Yellow', 'Yellow+', 'Green', 'Green+'];
@@ -493,11 +489,6 @@
 
                 // Debug log for bullet level changes
                 console.log(`Weapon Level: ${this.weaponLevel}, Bullet Type: ${this.bulletType}`);
-
-                // Cap shield at max level
-                if (this.shield > this.maxShield) {
-                    this.shield = this.maxShield;
-                }
             }
 
             resetUpgrades() {
@@ -506,11 +497,9 @@
                 this.weaponLevel = 0;
                 this.rechargeLevel = 0;
                 this.thrustLevel = 0;
-                this.shieldLevel = 0;
                 this.energyLevel = 0;
                 this.rotationLevel = 0;
                 this.wallCount = 0;
-                this.shield = 0;
                 this.updateStatsFromLevels();
             }
 
@@ -522,6 +511,8 @@
                 this.updateStatsFromLevels(); // Recalculate max energy
                 this.energy = this.maxEnergy;
                 this.vel.clear();
+                this.shieldActive = false;
+                this.shieldTimer = 0;
 
                 // Respawn in center of world
                 this.pos.x = 4000;
@@ -600,12 +591,14 @@
                 this.gunTimeout = this.gunTimeoutDefault;
 
                 // Create bullet with ship velocity + bullet velocity
+                const ownerId = (window.game && window.game.playerId) ? window.game.playerId : 'local';
                 const bullet = new Bullet(
                     this.pos.x + Math.sin(this.angle) * this.size,
                     this.pos.y + -Math.cos(this.angle) * this.size,
                     this.vel.x + Math.sin(this.angle) * 600, // Bullet speed
                     this.vel.y + -Math.cos(this.angle) * 600,
-                    this.weaponLevel // Pass weapon level directly (0-5)
+                    this.weaponLevel, // Pass weapon level directly (0-5)
+                    ownerId
                 );
 
                 this.bullets.push(bullet);
@@ -614,10 +607,12 @@
                 if (window.game && window.game.isMultiplayer) {
                     window.game.sendMultiplayerMessage({
                         type: 'bullet',
+                        playerId: ownerId,
                         x: bullet.pos.x,
                         y: bullet.pos.y,
                         vx: bullet.vel.x,
-                        vy: bullet.vel.y
+                        vy: bullet.vel.y,
+                        weaponLevel: this.weaponLevel
                     });
                 }
             }
@@ -633,13 +628,15 @@
                 this.gunTimeout = this.gunTimeoutDefault * 2; // Longer timeout for bombs
 
                 // Create bomb with ship velocity + bomb velocity
+                const ownerId = (window.game && window.game.playerId) ? window.game.playerId : 'local';
                 const bomb = new Bomb(
                     this.pos.x + Math.sin(this.angle) * this.size,
                     this.pos.y + -Math.cos(this.angle) * this.size,
                     this.vel.x + Math.sin(this.angle) * 300, // Slower than bullets
                     this.vel.y + -Math.cos(this.angle) * 300,
                     this.bulletType === 'yellow' ? 'yellow' : 'red', // Only red and yellow bombs
-                    this.weaponLevel // Pass weapon level for bouncing logic
+                    this.weaponLevel, // Pass weapon level for bouncing logic
+                    ownerId
                 );
 
                 // Add to game's bomb array (we'll need to pass this reference)
@@ -650,11 +647,13 @@
                     if (window.game.isMultiplayer) {
                         window.game.sendMultiplayerMessage({
                             type: 'bomb',
+                            playerId: ownerId,
                             x: bomb.pos.x,
                             y: bomb.pos.y,
                             vx: bomb.vel.x,
                             vy: bomb.vel.y,
-                            color: bomb.color
+                            color: bomb.color,
+                            weaponLevel: this.weaponLevel
                         });
                     }
                 }
@@ -704,6 +703,15 @@
                 }
             }
 
+            activateShield(duration = 10) {
+                this.shieldActive = true;
+                this.shieldTimer = duration;
+            }
+
+            isShieldActive() {
+                return this.shieldActive && this.shieldTimer > 0;
+            }
+
             update(deltaTime) {
                 // Update timers
                 if (this.gunTimeout > 0) {
@@ -718,9 +726,11 @@
                     this.energy = Math.min(this.maxEnergy, this.energy + this.energyRecharge * deltaTime);
                 }
 
-                // Shield decay (shields don't decay if you have shield upgrades)
-                if (this.shield > 0 && this.shieldLevel === 0) {
-                    this.shield = Math.max(0, this.shield - 10 * deltaTime);
+                if (this.shieldActive) {
+                    this.shieldTimer = Math.max(0, this.shieldTimer - deltaTime);
+                    if (this.shieldTimer <= 0) {
+                        this.shieldActive = false;
+                    }
                 }
 
                 // Apply velocity limits
@@ -809,6 +819,18 @@
                     ctx.fill();
                 }
 
+                if (this.isShieldActive()) {
+                    const radius = (this.spriteDrawSize ? this.spriteDrawSize / 2 : this.size) + 10;
+                    const pulse = 0.4 + 0.2 * Math.sin(Date.now() / 150);
+                    ctx.globalAlpha = pulse;
+                    ctx.strokeStyle = '#00ffff';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.globalAlpha = 1;
+                }
+
                 ctx.restore();
 
                 // Restore smoothing for other elements
@@ -855,8 +877,8 @@
                         spriteIndex: 3,
                         color: '#0080ff',
                         effect: 'shield',
-                        name: 'SHIELD UPGRADE',
-                        message: '+25 Max Shield (Permanent!)'
+                        name: 'SHIELD BOOST',
+                        message: '10s Protective Barrier!'
                     },
                     recharge: {
                         spriteIndex: 4,
@@ -977,10 +999,7 @@
                         }
                         break;
                     case 'shield':
-                        // Permanent shield upgrade
-                        ship.shieldLevel++;
-                        ship.updateStatsFromLevels();
-                        ship.shield = ship.maxShield; // Fill to new max
+                        ship.activateShield(10);
                         break;
                     case 'recharge':
                         // Permanent recharge upgrade
@@ -1009,28 +1028,29 @@
 
         // Bullet class
         class Bullet {
-            constructor(x, y, vx, vy, weaponLevel = 0) {
+            constructor(x, y, vx, vy, weaponLevel = 0, ownerId = null) {
                 this.pos = new Vector2D(x, y);
                 this.vel = new Vector2D(vx, vy);
                 this.weaponLevel = weaponLevel;
                 this.upgradeLevel = weaponLevel; // Track specific upgrade level (0-5)
                 this.bounceCount = 0;
                 this.hasHitWall = false;
+                this.ownerId = ownerId;
 
                 // 6-level bullet progression system
                 const bulletConfigs = [
                     // Level 0: Basic Red
-                    { color: '#ff4444', damage: 30, lifetime: 6.0, canBounce: false, name: 'Red' },
+                    { color: '#ff4444', damage: 110, lifetime: 6.0, canBounce: false, name: 'Red' },
                     // Level 1: Red with Border (bouncing)
-                    { color: '#ff4444', damage: 40, lifetime: 7.0, canBounce: true, name: 'Red+' },
+                    { color: '#ff4444', damage: 120, lifetime: 7.0, canBounce: true, name: 'Red+' },
                     // Level 2: Basic Yellow
-                    { color: '#ffff44', damage: 60, lifetime: 9.0, canBounce: false, name: 'Yellow' },
+                    { color: '#ffff44', damage: 130, lifetime: 9.0, canBounce: false, name: 'Yellow' },
                     // Level 3: Yellow with Border
-                    { color: '#ffff44', damage: 75, lifetime: 11.0, canBounce: false, name: 'Yellow+' },
+                    { color: '#ffff44', damage: 140, lifetime: 11.0, canBounce: false, name: 'Yellow+' },
                     // Level 4: Basic Green
-                    { color: '#44ff44', damage: 90, lifetime: 15.0, canBounce: false, name: 'Green' },
+                    { color: '#44ff44', damage: 150, lifetime: 15.0, canBounce: false, name: 'Green' },
                     // Level 5: Green with Border (bouncing)
-                    { color: '#44ff44', damage: 120, lifetime: 18.0, canBounce: true, name: 'Green+' }
+                    { color: '#44ff44', damage: 160, lifetime: 18.0, canBounce: true, name: 'Green+' }
                 ];
 
                 const config = bulletConfigs[Math.min(weaponLevel, 5)] || bulletConfigs[0];
@@ -1182,7 +1202,7 @@
 
         // Bomb class
         class Bomb {
-            constructor(x, y, vx, vy, bombType = 'red', weaponLevel = 0) {
+            constructor(x, y, vx, vy, bombType = 'red', weaponLevel = 0, ownerId = null) {
                 this.pos = new Vector2D(x, y);
                 this.vel = new Vector2D(vx, vy);
                 this.bombType = bombType;
@@ -1193,6 +1213,9 @@
                 this.maxBounces = (bombType === 'yellow' && weaponLevel >= 2) ? 1 : 0;
                 this.wallBounceCount = 0; // Track wall bounces separately
                 this.maxWallBounces = 1; // All bombs can only bounce once off walls
+                this.ownerId = ownerId;
+                this.age = 0; // Track how long the bomb has been active
+                this.armDelay = 0.35; // Give the bomb time to leave the firing ship
 
                 // Bomb properties based on type
                 const bombConfig = {
@@ -1201,16 +1224,16 @@
                         size: 6,
                         shrapnelCount: 8,
                         shrapnelSpeed: 200,
-                        explosionRadius: 80,
-                        damage: 1
+                        explosionRadius: 130,
+                        damage: 450
                     },
                     yellow: {
                         color: '#ffff66',
                         size: 8,
                         shrapnelCount: 12,
                         shrapnelSpeed: 250,
-                        explosionRadius: 120,
-                        damage: 2
+                        explosionRadius: 140,
+                        damage: 650
                     }
                 };
 
@@ -1225,6 +1248,7 @@
 
             update(deltaTime) {
                 if (!this.exploded) {
+                    this.age += deltaTime;
                     this.pos.add(new Vector2D(this.vel.x * deltaTime, this.vel.y * deltaTime));
                     // Bombs don't expire on their own - they travel across the entire map
 
@@ -1426,10 +1450,11 @@
                         const dy = ship.pos.y - brick.y;
                         const distance = Math.sqrt(dx * dx + dy * dy);
 
-                        if (distance < this.brickSize / 2 + ship.size / 2) {
+                        const shipRadius = ship.hitRadius !== undefined ? ship.hitRadius : ship.size;
+                        if (distance < this.brickSize / 2 + shipRadius) {
                             // Block ship movement - push ship away from wall
                             const angle = Math.atan2(dy, dx);
-                            const pushDistance = this.brickSize / 2 + ship.size / 2 + 2;
+                            const pushDistance = this.brickSize / 2 + shipRadius + 2;
 
                             ship.pos.x = brick.x + Math.cos(angle) * pushDistance;
                             ship.pos.y = brick.y + Math.sin(angle) * pushDistance;
@@ -1479,6 +1504,7 @@
                 this.height = canvasHeight;
                 this.x = 0; // World position of viewport center
                 this.y = 0;
+                this.zoom = 1;
 
                 // World size (much larger than viewport)
                 this.worldWidth = 8000;
@@ -1599,6 +1625,7 @@
                 this.playerId = null;
                 this.otherPlayers = new Map();
                 this.ws = null;
+                this.lastDamageSource = null;
 
                 // Viewport for camera system
                 this.viewport = new Viewport(this.canvas.width, this.canvas.height);
@@ -1614,6 +1641,19 @@
                 this.powerUpSpawnTimer = 0;
                 this.powerUpSpawnInterval = 4; // Spawn every 4 seconds (100% more frequent)
                 this.powerUpsCollected = 0; // Player's bounty/score
+                this.playerBounties = new Map();
+                this.safeZone = {
+                    x: this.viewport.worldWidth / 2,
+                    y: this.viewport.worldHeight / 2,
+                    radius: 500
+                };
+                // #TODO: Circle back once QA verifies multiplayer positions stay tight after long idle sessions.
+                this.lastBroadcastState = {
+                    time: 0,
+                    x: null,
+                    y: null,
+                    rotation: null
+                };
 
                 // Weapons system
                 this.bombs = [];
@@ -1651,6 +1691,8 @@
                 // Setup config panel
                 this.setupConfigPanel();
 
+                this.updateLocalBounty(false);
+
                 this.gameLoop();
             }
 
@@ -1683,6 +1725,9 @@
                     console.log('Disconnected from multiplayer server');
                     this.isMultiplayer = false;
                     this.otherPlayers.clear();
+                    this.playerBounties.clear();
+                    this.playerId = null;
+                    this.updateLocalBounty(false);
                     statusEl.textContent = 'Disconnected';
                     btnEl.textContent = 'JOIN MULTIPLAYER';
                     btnEl.disabled = false;
@@ -1699,42 +1744,69 @@
                 switch (data.type) {
                     case 'init':
                         this.playerId = data.playerId;
+                        this.playerBounties.delete('local');
+                        this.setPlayerBounty(this.playerId, this.powerUpsCollected);
                         data.players.forEach(player => {
                             if (player.id !== this.playerId) {
-                                this.otherPlayers.set(player.id, new Ship(player.x, player.y, false));
+                                const shipType = Number.isFinite(player.shipType) ? player.shipType : 1;
+                                this.otherPlayers.set(player.id, new Ship(player.x, player.y, false, shipType));
+                                const existingBounty = Number.isFinite(player.bounty) ? player.bounty : 0;
+                                this.setPlayerBounty(player.id, existingBounty);
                             }
                         });
+                        this.updateLocalBounty(true);
+                        this.broadcastPlayerState(true);
                         break;
 
                     case 'playerJoined':
                         if (data.player.id !== this.playerId) {
-                            this.otherPlayers.set(data.player.id, new Ship(data.player.x, data.player.y, false));
+                            const shipType = Number.isFinite(data.player.shipType) ? data.player.shipType : 1;
+                            this.otherPlayers.set(data.player.id, new Ship(data.player.x, data.player.y, false, shipType));
+                            const joinedBounty = Number.isFinite(data.player.bounty) ? data.player.bounty : 0;
+                            this.setPlayerBounty(data.player.id, joinedBounty);
                         }
                         break;
 
                     case 'playerLeft':
                         this.otherPlayers.delete(data.playerId);
+                        this.playerBounties.delete(data.playerId);
                         break;
 
                     case 'playerMove':
-                        const player = this.otherPlayers.get(data.playerId);
-                        if (player) {
-                            player.pos.x = data.x;
-                            player.pos.y = data.y;
-                            player.angle = data.rotation;
+                        // Legacy compatibility (older servers)
+                        this.updateRemotePlayer(data.playerId, data);
+                        break;
+                    case 'playerUpdate':
+                        if (data.id !== this.playerId) {
+                            this.updateRemotePlayer(data.id, data);
                         }
                         break;
 
                     case 'bullet':
                         if (data.playerId !== this.playerId) {
-                            const bullet = new Bullet(data.x, data.y, data.vx, data.vy);
+                            const bullet = new Bullet(
+                                data.x,
+                                data.y,
+                                data.vx,
+                                data.vy,
+                                data.weaponLevel || 0,
+                                data.playerId
+                            );
                             this.playerShip.bullets.push(bullet);
                         }
                         break;
 
                     case 'bomb':
                         if (data.playerId !== this.playerId) {
-                            const bomb = new Bomb(data.x, data.y, data.vx, data.vy, data.color);
+                            const bomb = new Bomb(
+                                data.x,
+                                data.y,
+                                data.vx,
+                                data.vy,
+                                data.color,
+                                data.weaponLevel || 0,
+                                data.playerId
+                            );
                             this.bombs.push(bomb);
                         }
                         break;
@@ -1754,24 +1826,73 @@
                         break;
                     case 'playerDamage':
                         if (data.targetId === this.playerId) {
-                            this.damagePlayer(data.bulletLevel || data.bulletType || 0);
+                            this.damagePlayer(
+                                data.bulletLevel || data.bulletType || 0,
+                                data.attackerId || null
+                            );
                         }
                         break;
                     case 'bombDamage':
                         if (data.targetId === this.playerId) {
-                            this.playerShip.shield -= data.damage;
-                            if (this.playerShip.shield <= 0) {
-                                this.playerShip.shield = 0;
-                                // Player died - respawn
-                                this.playerShip.pos.x = this.viewport.worldWidth / 2;
-                                this.playerShip.pos.y = this.viewport.worldHeight / 2;
-                                this.playerShip.shield = this.playerShip.maxShield;
-                            }
+                            this.applyDamageToPlayerShip(
+                                data.damage || 0,
+                                {
+                                    attackerId: data.attackerId || null,
+                                    weapon: 'bomb',
+                                    metadata: { bombType: data.bombType || null }
+                                }
+                            );
                         }
                         break;
                     case 'bombExplosion':
                         // Create visual explosion effect and shrapnel
                         this.createRemoteBombExplosion(data.x, data.y, data.bombType);
+                        break;
+                    case 'playerKilled':
+                        if (Number.isFinite(data.victimBounty)) {
+                            this.setPlayerBounty(data.victimId, data.victimBounty);
+                        }
+                        if (Number.isFinite(data.killerBounty)) {
+                            this.setPlayerBounty(data.killerId, data.killerBounty);
+                        }
+                        if (!this.isLocalPlayer(data.victimId)) {
+                            const victimShip = this.otherPlayers.get(data.victimId);
+                            if (victimShip) {
+                                victimShip.die();
+                            }
+                        }
+                        if (!this.isLocalPlayer(data.victimId)) {
+                            this.showKillMessage(
+                                this.buildKillMessage(
+                                    data.victimId,
+                                    data.killerId,
+                                    data.victimBounty,
+                                    data.killerBounty
+                                )
+                            );
+                        }
+                        break;
+                    case 'bountyUpdate':
+                        if (!this.isLocalPlayer(data.playerId) && Number.isFinite(data.bounty)) {
+                            this.setPlayerBounty(data.playerId, data.bounty);
+                        }
+                        break;
+                    case 'playerDisconnected':
+                        this.otherPlayers.delete(data.id);
+                        this.playerBounties.delete(data.id);
+                        break;
+                    case 'shipChange':
+                        if (data.playerId === this.playerId) {
+                            this.playerShip.shipType = data.shipType;
+                            this.playerShip.updateStatsFromLevels();
+                            this.updateHUD();
+                        } else {
+                            const ship = this.otherPlayers.get(data.playerId);
+                            if (ship && Number.isFinite(data.shipType)) {
+                                ship.shipType = data.shipType;
+                                ship.updateStatsFromLevels();
+                            }
+                        }
                         break;
                 }
             }
@@ -1782,38 +1903,288 @@
                 }
             }
 
+            broadcastPlayerState(force = false) {
+                if (!this.isMultiplayer) {
+                    return;
+                }
+
+                const now = (typeof performance !== 'undefined' && performance.now)
+                    ? performance.now()
+                    : Date.now();
+                const last = this.lastBroadcastState;
+                const lastTime = last.time || 0;
+                const lastX = last.x != null ? last.x : this.playerShip.pos.x;
+                const lastY = last.y != null ? last.y : this.playerShip.pos.y;
+                const lastRotation = last.rotation != null ? last.rotation : this.playerShip.angle;
+
+                const dx = Math.abs(this.playerShip.pos.x - lastX);
+                const dy = Math.abs(this.playerShip.pos.y - lastY);
+                const dRotation = Math.abs(this.playerShip.angle - lastRotation);
+                const dt = now - lastTime;
+
+                const positionChanged = dx > 2 || dy > 2;
+                const rotationChanged = dRotation > 0.02;
+                const timeElapsed = dt > 120;
+
+                if (!force && !positionChanged && !rotationChanged && !timeElapsed) {
+                    return;
+                }
+
+                this.sendMultiplayerMessage({
+                    type: 'playerUpdate',
+                    x: this.playerShip.pos.x,
+                    y: this.playerShip.pos.y,
+                    rotation: this.playerShip.angle,
+                    thrust: !!(this.input && this.input.thrust),
+                    shipType: this.playerShip.shipType
+                });
+
+                this.lastBroadcastState = {
+                    time: now,
+                    x: this.playerShip.pos.x,
+                    y: this.playerShip.pos.y,
+                    rotation: this.playerShip.angle
+                };
+            }
+
+            updateRemotePlayer(playerId, data) {
+                const player = this.otherPlayers.get(playerId);
+                if (!player) {
+                    return;
+                }
+
+                if (Number.isFinite(data.x)) {
+                    player.pos.x = data.x;
+                }
+                if (Number.isFinite(data.y)) {
+                    player.pos.y = data.y;
+                }
+                if (Number.isFinite(data.rotation)) {
+                    player.angle = data.rotation;
+                }
+                if (Number.isFinite(data.shipType)) {
+                    player.shipType = data.shipType;
+                    player.updateStatsFromLevels();
+                }
+            }
+
             checkBulletPlayerCollision(bullet, player) {
                 const dx = bullet.pos.x - player.pos.x;
                 const dy = bullet.pos.y - player.pos.y;
                 const distance = Math.sqrt(dx * dx + dy * dy);
-                return distance < (bullet.size + player.size) / 2;
+                const playerHitRadius = player.hitRadius !== undefined ? player.hitRadius : player.size;
+                return distance < (bullet.size * 0.5) + (playerHitRadius * 0.5);
             }
 
-            damagePlayer(bulletLevel) {
-                // Use the same damage values as the bullet configs (6 levels)
-                const damageLevels = [30, 40, 60, 75, 90, 120];
-                const damage = damageLevels[Math.min(bulletLevel, 5)] || 30;
+            applyDamageToPlayerShip(damage, source = null) {
+                if (!damage) {
+                    return;
+                }
 
-                this.playerShip.shield -= damage;
-                console.log(`Hit by level ${bulletLevel} bullet for ${damage} damage`);
-                if (this.playerShip.shield <= 0) {
-                    this.playerShip.shield = 0;
-                    // Player died - respawn
-                    this.playerShip.pos.x = this.viewport.worldWidth / 2;
-                    this.playerShip.pos.y = this.viewport.worldHeight / 2;
-                    this.playerShip.shield = this.playerShip.maxShield;
+                if (source && source.attackerId) {
+                    const timestamp = (typeof performance !== 'undefined' && performance.now)
+                        ? performance.now()
+                        : Date.now();
+                    this.lastDamageSource = {
+                        attackerId: source.attackerId,
+                        weapon: source.weapon || 'unknown',
+                        metadata: source.metadata || {},
+                        timestamp
+                    };
+                }
+
+                if (this.isInSafeZone(this.playerShip.pos.x, this.playerShip.pos.y)) {
+                    return;
+                }
+
+                if (this.playerShip.isShieldActive()) {
+                    return;
+                }
+
+                this.playerShip.energy = Math.max(0, this.playerShip.energy - damage);
+
+                if (this.playerShip.energy <= 0) {
+                    const killerInfo = this.lastDamageSource;
+                    this.handlePlayerDeath(killerInfo);
+                    this.playerShip.die();
+                    this.broadcastPlayerState(true);
+                    this.lastDamageSource = null;
                 }
             }
 
-            sendPlayerDamage(playerId, bulletType) {
-                this.sendMultiplayerMessage({
-                    type: 'playerDamage',
-                    targetId: playerId,
-                    bulletType: bulletType
+            damagePlayer(bulletLevel, attackerId = null) {
+                const damageLevels = [110, 120, 130, 140, 150, 160];
+                const damage = damageLevels[Math.min(bulletLevel, 5)] || damageLevels[0];
+
+                console.log(`Hit by level ${bulletLevel} bullet for ${damage} damage`);
+                this.applyDamageToPlayerShip(damage, {
+                    attackerId,
+                    weapon: 'bullet',
+                    metadata: { bulletLevel }
                 });
             }
 
+            sendPlayerDamage(playerId, bullet) {
+                if (!this.isMultiplayer) {
+                    return;
+                }
+
+                const target = this.otherPlayers.get(playerId);
+                if (target && this.isInSafeZone(target.pos.x, target.pos.y)) {
+                    return;
+                }
+
+                const payload = {
+                    type: 'playerDamage',
+                    targetId: playerId,
+                    attackerId: this.playerId,
+                    bulletLevel: bullet?.weaponLevel ?? bullet?.upgradeLevel ?? 0
+                };
+
+                this.sendMultiplayerMessage(payload);
+            }
+
+            handlePlayerDeath(killerInfo) {
+                const killerId = killerInfo && killerInfo.attackerId ? killerInfo.attackerId : null;
+                const victimBounty = this.powerUpsCollected;
+                const killerBounty = killerId ? this.getPlayerBounty(killerId) : null;
+
+                this.setPlayerBounty(this.playerId, victimBounty);
+
+                if (this.isMultiplayer) {
+                    this.sendMultiplayerMessage({
+                        type: 'playerKilled',
+                        victimId: this.playerId,
+                        killerId,
+                        victimBounty,
+                        killerBounty
+                    });
+                }
+
+                this.updateLocalBounty();
+
+                this.showKillMessage(this.buildKillMessage(this.playerId, killerId, victimBounty, killerBounty));
+            }
+
+            buildKillMessage(victimId, killerId, victimBounty = null, killerBounty = null) {
+                const victimLabel = this.formatPlayerLabel(victimId, victimBounty);
+                const killerLabel = killerId ? this.formatPlayerLabel(killerId, killerBounty) : 'the arena';
+
+                const victimIsLocal = this.isLocalPlayer(victimId);
+                const killerIsLocal = killerId ? this.isLocalPlayer(killerId) : false;
+
+                if (victimIsLocal) {
+                    return killerId
+                        ? `${victimLabel} were killed by ${killerLabel}.`
+                        : `${victimLabel} were destroyed.`;
+                }
+
+                if (killerIsLocal) {
+                    return `${victimLabel} was killed by ${this.formatPlayerLabel(this.playerId, killerBounty)}.`;
+                }
+
+                if (killerId) {
+                    return `${victimLabel} was killed by ${killerLabel}.`;
+                }
+
+                return `${victimLabel} was destroyed.`;
+            }
+
+            resolvePlayerName(playerId) {
+                if (this.isLocalPlayer(playerId)) {
+                    return 'You';
+                }
+
+                if (this.otherPlayers.has(playerId)) {
+                    return `Pilot ${playerId}`;
+                }
+
+                if (!playerId || playerId === 'local') {
+                    return 'Unknown';
+                }
+
+                return `Pilot ${playerId}`;
+            }
+
+            isLocalPlayer(playerId) {
+                if (!this.playerId) {
+                    return playerId === null || playerId === undefined || playerId === 'local';
+                }
+                return playerId === this.playerId;
+            }
+
+            setPlayerBounty(playerId, bounty) {
+                if (playerId && Number.isFinite(bounty)) {
+                    this.playerBounties.set(playerId, Math.max(0, Math.floor(bounty)));
+                }
+            }
+
+            getPlayerBounty(playerId) {
+                if (this.isLocalPlayer(playerId)) {
+                    return this.powerUpsCollected;
+                }
+                if (playerId && this.playerBounties.has(playerId)) {
+                    return this.playerBounties.get(playerId);
+                }
+                return null;
+            }
+
+            formatPlayerLabel(playerId, bountyOverride = null) {
+                const name = this.resolvePlayerName(playerId);
+                const bounty = (Number.isFinite(bountyOverride) ? Math.floor(bountyOverride) : this.getPlayerBounty(playerId));
+                const bountyText = Number.isFinite(bounty) ? bounty : '?';
+                return `${name} (B: ${bountyText})`;
+            }
+
+            updateLocalBounty(broadcast = true) {
+                const bounty = this.powerUpsCollected;
+
+                if (this.playerId) {
+                    this.setPlayerBounty(this.playerId, bounty);
+                    if (broadcast && this.isMultiplayer) {
+                        this.sendMultiplayerMessage({
+                            type: 'bountyUpdate',
+                            playerId: this.playerId,
+                            bounty
+                        });
+                    }
+                } else {
+                    this.playerBounties.set('local', bounty);
+                }
+            }
+
+            showKillMessage(text) {
+                if (!text) {
+                    return;
+                }
+
+                const container = document.getElementById('messageContainer');
+                if (!container) {
+                    console.warn('Kill message container missing');
+                    return;
+                }
+
+                const messageEl = document.createElement('div');
+                messageEl.className = 'power-up-message';
+                messageEl.style.color = '#ff4444';
+                messageEl.style.borderColor = '#ff4444';
+                messageEl.style.textShadow = '2px 2px 4px #000, 0 0 15px #ff4444';
+                messageEl.innerHTML = `<div style="font-size: 24px;">${text}</div>`;
+
+                container.appendChild(messageEl);
+
+                setTimeout(() => {
+                    if (messageEl.parentNode) {
+                        messageEl.parentNode.removeChild(messageEl);
+                    }
+                }, 3000);
+            }
+
             checkBombPlayerProximity(bomb, player, radius) {
+                if (bomb.age !== undefined && bomb.age < bomb.armDelay) {
+                    return false;
+                }
+
                 const dx = bomb.pos.x - player.pos.x;
                 const dy = bomb.pos.y - player.pos.y;
                 const distance = Math.sqrt(dx * dx + dy * dy);
@@ -1821,8 +2192,8 @@
             }
 
             explodeBomb(bomb, bombIndex) {
-                const explosionRadius = 120;
-                const shrapnelCount = 8;
+                const explosionRadius = bomb.explosionRadius;
+                const shrapnelCount = bomb.shrapnelCount || 8;
 
                 // Remove the bomb
                 this.bombs.splice(bombIndex, 1);
@@ -1835,42 +2206,46 @@
                         bomb.pos.y,
                         Math.cos(angle) * 400,
                         Math.sin(angle) * 400,
-                        bomb.type // Same type as the bomb
+                        Math.min(bomb.weaponLevel || 0, 5),
+                        bomb.ownerId || null
                     );
                     this.playerShip.bullets.push(shrapnel);
                 }
 
                 // Damage all players within explosion radius
-                this.damagePlayersInRadius(bomb.pos.x, bomb.pos.y, explosionRadius, bomb.type);
+                this.damagePlayersInRadius(
+                    bomb.pos.x,
+                    bomb.pos.y,
+                    explosionRadius,
+                    bomb.damage,
+                    bomb.ownerId,
+                    bomb.bombType
+                );
 
                 // Send explosion to multiplayer
                 this.sendMultiplayerMessage({
                     type: 'bombExplosion',
                     x: bomb.pos.x,
                     y: bomb.pos.y,
-                    bombType: bomb.type
+                    bombType: bomb.bombType
                 });
             }
 
-            damagePlayersInRadius(x, y, radius, bombType) {
+            damagePlayersInRadius(x, y, radius, baseDamage, ownerId = null, bombType = null) {
                 // Damage local player
                 const localDx = this.playerShip.pos.x - x;
                 const localDy = this.playerShip.pos.y - y;
                 const localDistance = Math.sqrt(localDx * localDx + localDy * localDy);
 
-                if (localDistance < radius) {
+                if (localDistance < radius && !this.isInSafeZone(this.playerShip.pos.x, this.playerShip.pos.y)) {
                     const damageMult = 1 - (localDistance / radius); // Closer = more damage
-                    let baseDamage = bombType === 'yellow' ? 80 : 50;
-                    const finalDamage = Math.floor(baseDamage * damageMult);
+                    const finalDamage = Math.max(1, Math.floor(baseDamage * damageMult));
 
-                    this.playerShip.shield -= finalDamage;
-                    if (this.playerShip.shield <= 0) {
-                        this.playerShip.shield = 0;
-                        // Player died - respawn
-                        this.playerShip.pos.x = this.viewport.worldWidth / 2;
-                        this.playerShip.pos.y = this.viewport.worldHeight / 2;
-                        this.playerShip.shield = this.playerShip.maxShield;
-                    }
+                    this.applyDamageToPlayerShip(finalDamage, {
+                        attackerId: ownerId,
+                        weapon: 'bomb',
+                        metadata: { bombType }
+                    });
                 }
 
                 // Damage other multiplayer players
@@ -1879,15 +2254,16 @@
                     const dy = otherPlayer.pos.y - y;
                     const distance = Math.sqrt(dx * dx + dy * dy);
 
-                    if (distance < radius) {
+                    if (distance < radius && !this.isInSafeZone(otherPlayer.pos.x, otherPlayer.pos.y)) {
                         const damageMult = 1 - (distance / radius);
-                        let baseDamage = bombType === 'yellow' ? 80 : 50;
-                        const finalDamage = Math.floor(baseDamage * damageMult);
+                        const finalDamage = Math.max(1, Math.floor(baseDamage * damageMult));
 
                         this.sendMultiplayerMessage({
                             type: 'bombDamage',
                             targetId: playerId,
-                            damage: finalDamage
+                            attackerId: ownerId,
+                            damage: finalDamage,
+                            bombType
                         });
                     }
                 }
@@ -1904,7 +2280,8 @@
                         y,
                         Math.cos(angle) * 400,
                         Math.sin(angle) * 400,
-                        bombType
+                        0,
+                        null
                     );
                     this.playerShip.bullets.push(shrapnel);
                 }
@@ -1953,6 +2330,9 @@
                 if (this.playerShip.shipType < 1) this.playerShip.shipType = 8;
                 if (this.playerShip.shipType > 8) this.playerShip.shipType = 1;
 
+                this.playerShip.updateStatsFromLevels();
+                this.updateHUD();
+
                 // Update the HUD display
                 const shipName = this.shipTypes[this.playerShip.shipType]?.name || 'Unknown';
                 document.getElementById('shipType').textContent = shipName;
@@ -1963,6 +2343,7 @@
                         type: 'shipChange',
                         shipType: this.playerShip.shipType
                     }));
+                    this.broadcastPlayerState(true);
                 }
             }
 
@@ -2104,8 +2485,15 @@
                 // Basic stats
                 document.getElementById('energy').textContent = Math.floor(ship.energy);
                 document.getElementById('maxEnergy').textContent = ship.maxEnergy;
-                document.getElementById('shield').textContent = Math.floor(ship.shield || 0);
-                document.getElementById('maxShield').textContent = ship.maxShield;
+                const shieldStatusEl = document.getElementById('shieldStatus');
+                if (shieldStatusEl) {
+                    if (ship.isShieldActive()) {
+                        const remaining = ship.shieldTimer > 0 ? ship.shieldTimer : 0;
+                        shieldStatusEl.textContent = `Active (${remaining.toFixed(1)}s)`;
+                    } else {
+                        shieldStatusEl.textContent = 'Inactive';
+                    }
+                }
                 document.getElementById('powerUps').textContent = this.powerUpsCollected;
                 document.getElementById('wallCount').textContent = ship.wallCount;
                 document.getElementById('deaths').textContent = ship.deaths;
@@ -2128,8 +2516,8 @@
                 document.getElementById('bulletBounce').textContent = bounceText;
 
                 // Show bullet damage for 6-level system
-                const damageLevels = [30, 40, 60, 75, 90, 120];
-                const currentDamage = damageLevels[Math.min(ship.weaponLevel, 5)] || 30;
+                const damageLevels = [110, 120, 130, 140, 150, 160];
+                const currentDamage = damageLevels[Math.min(ship.weaponLevel, 5)] || damageLevels[0];
                 document.getElementById('bulletDamage').textContent = currentDamage;
                 document.getElementById('bombType').textContent = ship.bulletType.charAt(0).toUpperCase() + ship.bulletType.slice(1);
                 document.getElementById('rechargeLevel').textContent = ship.rechargeLevel;
@@ -2140,7 +2528,6 @@
                 const rotationBonus = Math.floor(ship.rotationLevel * 33);
                 const rotationText = ship.rotationLevel >= 3 ? `${rotationBonus}% (MAX)` : `${rotationBonus}%`;
                 document.getElementById('rotationBonus').textContent = rotationText;
-                document.getElementById('shieldLevel').textContent = ship.shieldLevel;
 
                 // Energy bar
                 const energyFill = document.getElementById('energyFill');
@@ -2162,8 +2549,11 @@
                 this.ctx.fillStyle = gradient;
                 this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+                // Draw safe zone overlay before entities
                 // Draw scrolling stars
                 this.drawStars();
+
+                this.drawSafeZone();
 
                 // Draw all ships that are visible
                 for (const ship of this.ships) {
@@ -2220,6 +2610,56 @@
 
                 // Only draw world boundaries if we're near them
                 this.drawWorldBounds();
+            }
+
+            isInSafeZone(x, y) {
+                if (!this.safeZone) {
+                    return false;
+                }
+                const dx = x - this.safeZone.x;
+                const dy = y - this.safeZone.y;
+                return Math.sqrt(dx * dx + dy * dy) <= this.safeZone.radius;
+            }
+
+            drawSafeZone() {
+                if (!this.safeZone) {
+                    return;
+                }
+
+                const screenPos = this.viewport.worldToScreen(this.safeZone.x, this.safeZone.y);
+                const radius = this.safeZone.radius * this.viewport.zoom;
+
+                this.ctx.save();
+                this.ctx.beginPath();
+                const gradient = this.ctx.createRadialGradient(
+                    screenPos.x,
+                    screenPos.y,
+                    radius * 0.1,
+                    screenPos.x,
+                    screenPos.y,
+                    radius
+                );
+                gradient.addColorStop(0, 'rgba(0, 255, 200, 0.35)');
+                gradient.addColorStop(1, 'rgba(0, 255, 200, 0)');
+                this.ctx.fillStyle = gradient;
+                this.ctx.arc(screenPos.x, screenPos.y, radius, 0, Math.PI * 2);
+                this.ctx.fill();
+
+                this.ctx.strokeStyle = 'rgba(0, 255, 200, 0.6)';
+                this.ctx.lineWidth = 3;
+                this.ctx.setLineDash([12, 6]);
+                this.ctx.beginPath();
+                this.ctx.arc(screenPos.x, screenPos.y, radius, 0, Math.PI * 2);
+                this.ctx.stroke();
+                this.ctx.setLineDash([]);
+
+                this.ctx.fillStyle = 'rgba(0, 255, 200, 0.85)';
+                this.ctx.font = '18px "Courier New", monospace';
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText('SAFE ZONE', screenPos.x, screenPos.y);
+
+                this.ctx.restore();
             }
 
             drawStars() {
@@ -2359,7 +2799,6 @@
                     rechargeLevel: { slider: 'rechargeLevelSlider', value: 'rechargeLevelValue', property: 'rechargeLevel' },
                     thrustLevel: { slider: 'thrustLevelSlider', value: 'thrustLevelValue', property: 'thrustLevel' },
                     rotationLevel: { slider: 'rotationLevelSlider', value: 'rotationLevelValue', property: 'rotationLevel' },
-                    shieldLevel: { slider: 'shieldLevelSlider', value: 'shieldLevelValue', property: 'shieldLevel' },
                     wallCount: { slider: 'wallCountSlider', value: 'wallCountValue', property: 'wallCount' }
                 };
 
@@ -2428,7 +2867,6 @@
                     'rechargeLevelSlider': this.playerShip.rechargeLevel,
                     'thrustLevelSlider': this.playerShip.thrustLevel,
                     'rotationLevelSlider': this.playerShip.rotationLevel,
-                    'shieldLevelSlider': this.playerShip.shieldLevel,
                     'wallCountSlider': this.playerShip.wallCount
                 };
 
@@ -2465,15 +2903,10 @@
                     // Update player ship
                     this.playerShip.processInput(this.input, deltaTime);
 
-                    // Send player movement to server if multiplayer
-                    if (this.isMultiplayer && (this.input.left || this.input.right || this.input.thrust || this.input.reverse)) {
-                        this.sendMultiplayerMessage({
-                            type: 'move',
-                            x: this.playerShip.pos.x,
-                            y: this.playerShip.pos.y,
-                            rotation: this.playerShip.angle,
-                            thrust: this.input.thrust
-                        });
+                    // Share player state when it changes or at steady intervals
+                    if (this.isMultiplayer) {
+                        const isInputActive = this.input.left || this.input.right || this.input.thrust || this.input.reverse;
+                        this.broadcastPlayerState(isInputActive);
                     }
 
                     // Update all ships
@@ -2496,6 +2929,7 @@
                         if (powerUp.checkCollision(this.playerShip)) {
                             powerUp.applyEffect(this.playerShip);
                             this.powerUpsCollected++; // Increment bounty counter
+                            this.updateLocalBounty();
                             this.showPowerUpMessage(powerUp.config); // Show announcement
                         }
                     }
@@ -2539,7 +2973,11 @@
 
                             // Check collision with local player
                             if (this.checkBulletPlayerCollision(bullet, this.playerShip)) {
-                                this.damagePlayer(bullet.weaponLevel || bullet.upgradeLevel || 0);
+                                const attackerId = bullet.ownerId || null;
+                                this.damagePlayer(
+                                    bullet.weaponLevel || bullet.upgradeLevel || 0,
+                                    attackerId
+                                );
                                 ship.bullets.splice(i, 1);
                                 continue;
                             }
@@ -2548,7 +2986,7 @@
                             for (const [playerId, otherPlayer] of this.otherPlayers) {
                                 if (this.checkBulletPlayerCollision(bullet, otherPlayer)) {
                                     // Send damage to other player via server
-                                    this.sendPlayerDamage(playerId, bullet.type);
+                                    this.sendPlayerDamage(playerId, bullet);
                                     ship.bullets.splice(i, 1);
                                     break;
                                 }
@@ -2610,6 +3048,7 @@
                     this.bountyTimer += deltaTime;
                     if (this.bountyTimer >= this.bountyInterval) {
                         this.powerUpsCollected += this.bountyIncrease;
+                        this.updateLocalBounty();
                         this.bountyTimer = 0;
 
                         // Show bounty increase message
