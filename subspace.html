@@ -175,6 +175,7 @@
 
         <div class="hud">
             <div>Energy: <span id="energy">1100</span> / <span id="maxEnergy">1100</span></div>
+            <div>Boost: <span id="boostStatus">Ready</span></div>
             <div>Shield: <span id="shieldStatus">Inactive</span></div>
             <div>Bounty: <span id="powerUps">0</span></div>
             <div>Walls: <span id="wallCount">0</span></div>
@@ -200,6 +201,7 @@
             <div><strong>SUBSPACE CONTROLS:</strong></div>
             <div>A/D - Rotate Left/Right</div>
             <div>W - Thrust</div>
+            <div>SHIFT + W - Boost (double speed, heavy energy drain)</div>
             <div>S - Reverse Thrust</div>
             <div>CTRL - Fire Bullets</div>
             <div>TAB - Fire Bombs</div>
@@ -430,6 +432,13 @@
                 this.hitRadius = this.size * 1.1; // Keep radius close to sprite bounds with additional padding
                 this.bullets = [];
 
+                // Boost mechanics
+                this.boostActive = false;
+                this.boostSpeedMultiplier = 2.0; // Shift boost doubles thrust & top speed
+                this.boostEnergyUseMultiplier = 3.0; // ~300% more energy drain while boosting
+                this.boostEnergyDrainPerSecond = 150; // Recomputed per ship in updateStatsFromLevels()
+                this.boostMinEnergy = 50; // Require a small reserve to engage boost
+
                 // Permanent upgrade levels (reset on death)
                 this.maxSpeedLevel = 0; // +50 max speed per level
                 this.weaponLevel = 0; // Bullet progression: 0=red, 1=yellow, 2=green
@@ -480,6 +489,9 @@
                 const energyCosts = [67, 75, 90, 100, 120, 140]; // Energy cost per level
                 this.fireEnergy = energyCosts[Math.min(this.weaponLevel, 5)] || baseBulletCost;
                 this.energyRecharge = baseEnergyRecharge * (1 + this.rechargeLevel * 2.0); // Much higher scaling for infinite green bullets
+                this.baseEnergyRecharge = baseEnergyRecharge;
+                const energyUseMultiplier = this.boostEnergyUseMultiplier || 3.0;
+                this.boostEnergyDrainPerSecond = this.energyRecharge * energyUseMultiplier;
                 this.thrustMultiplier = baseThrustMultiplier * (1 + this.thrustLevel * 0.02); // +2% per level - ORIGINAL VALUE
                 this.gunTimeoutDefault = baseGunTimeout * (config.gunTimeoutMultiplier || 1.0);
 
@@ -552,12 +564,23 @@
 
                 // Thrust (reduced base acceleration, can be boosted by power-ups)
                 const baseThrustForce = 75; // Increased thrust force by 50% (50 * 1.5 = 75)
-                const thrustForce = baseThrustForce * this.thrustMultiplier * deltaTime;
+                let thrustForce = baseThrustForce * this.thrustMultiplier;
+
+                const boostRequested = input.boost && input.thrust;
+                const hasEnergyForBoost = this.energy > this.boostMinEnergy;
+                if (boostRequested && hasEnergyForBoost) {
+                    this.boostActive = true;
+                    thrustForce *= this.boostSpeedMultiplier;
+                } else if (!boostRequested || !hasEnergyForBoost) {
+                    this.boostActive = false;
+                }
+
+                const thrustDelta = thrustForce * deltaTime;
                 if (input.thrust) {
-                    this.vel.addPolar(thrustForce, this.angle);
+                    this.vel.addPolar(thrustDelta, this.angle);
                 }
                 if (input.reverse) {
-                    this.vel.addPolar(-thrustForce * 0.5, this.angle);
+                    this.vel.addPolar(-thrustDelta * 0.5, this.angle);
                 }
 
                 // Brake
@@ -726,6 +749,17 @@
                     this.energy = Math.min(this.maxEnergy, this.energy + this.energyRecharge * deltaTime);
                 }
 
+                // Boost drains energy heavily (~300% of passive recharge)
+                if (this.boostActive && this.boostEnergyDrainPerSecond > 0) {
+                    const boostCost = this.boostEnergyDrainPerSecond * deltaTime;
+                    if (boostCost > 0) {
+                        this.energy = Math.max(0, this.energy - boostCost);
+                        if (this.energy <= 0) {
+                            this.boostActive = false;
+                        }
+                    }
+                }
+
                 if (this.shieldActive) {
                     this.shieldTimer = Math.max(0, this.shieldTimer - deltaTime);
                     if (this.shieldTimer <= 0) {
@@ -734,7 +768,8 @@
                 }
 
                 // Apply velocity limits
-                this.vel.clamp(this.maxSpeed);
+                const speedCap = this.maxSpeed * (this.boostActive ? this.boostSpeedMultiplier : 1);
+                this.vel.clamp(speedCap);
 
                 // Update position (apply velocity scaled by deltaTime for proper units)
                 this.pos.add(new Vector2D(this.vel.x * deltaTime, this.vel.y * deltaTime));
@@ -1675,6 +1710,7 @@
                     thrust: false,
                     reverse: false,
                     brake: false,
+                    boost: false,
                     fire: false,
                     bomb: false,
                     deployWall: false,
@@ -2536,6 +2572,7 @@
                 this.input.thrust = this.keys['KeyW'] || this.keys['ArrowUp'];
                 this.input.reverse = this.keys['KeyS'] || this.keys['ArrowDown'];
                 this.input.brake = this.keys['Space'];
+                this.input.boost = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
                 this.input.fire = this.keys['ControlLeft'] || this.keys['ControlRight'];
                 this.input.bomb = this.keys['Tab'];
                 this.input.deployWall = this.keys['F2'];
@@ -2554,6 +2591,16 @@
                 // Basic stats
                 document.getElementById('energy').textContent = Math.floor(ship.energy);
                 document.getElementById('maxEnergy').textContent = ship.maxEnergy;
+                const boostStatusEl = document.getElementById('boostStatus');
+                if (boostStatusEl) {
+                    if (ship.boostActive) {
+                        boostStatusEl.textContent = 'Boosting';
+                    } else if (ship.energy <= ship.boostMinEnergy) {
+                        boostStatusEl.textContent = 'Low Energy';
+                    } else {
+                        boostStatusEl.textContent = 'Ready';
+                    }
+                }
                 const shieldStatusEl = document.getElementById('shieldStatus');
                 if (shieldStatusEl) {
                     if (ship.isShieldActive()) {
