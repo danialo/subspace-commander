@@ -427,7 +427,7 @@
                 this.energyRecharge = 50; // Energy recharge rate per second
 
                 this.size = 18; // Reasonable triangle size
-                this.hitRadius = this.size * 0.9; // Slightly smaller collision radius for ship hitbox
+                this.hitRadius = this.size * 1.1; // Keep radius close to sprite bounds with additional padding
                 this.bullets = [];
 
                 // Permanent upgrade levels (reset on death)
@@ -969,7 +969,8 @@
                     (this.pos.y - ship.pos.y) ** 2
                 );
 
-                return distance < (this.size + ship.size) / 2;
+                const pickupRadius = (this.size + ship.size) / 2;
+                return distance < pickupRadius * 1.1; // Expand ship + power-up hitbox ~10%
             }
 
             applyEffect(ship) {
@@ -992,8 +993,8 @@
                         ship.updateStatsFromLevels();
                         break;
                     case 'weapons':
-                        // Permanent weapon upgrade (sequential: red -> yellow -> green)
-                        if (ship.weaponLevel < 2) { // Max level is 2 (green bullets)
+                        // Permanent weapon upgrade (6-level progression up to Green+)
+                        if (ship.weaponLevel < 5) {
                             ship.weaponLevel++;
                             ship.updateStatsFromLevels();
                         }
@@ -1664,6 +1665,7 @@
                 this.bountyTimer = 0;
                 this.bountyInterval = 60; // 1 minute in seconds
                 this.bountyIncrease = 50;
+                this.killBountyBonus = 250; // Bonus applied to killer bounty in multiplayer
 
                 // Input state
                 this.keys = {};
@@ -1854,6 +1856,11 @@
                         if (Number.isFinite(data.killerBounty)) {
                             this.setPlayerBounty(data.killerId, data.killerBounty);
                         }
+                        if (this.isLocalPlayer(data.killerId) && Number.isFinite(data.killerBounty)) {
+                            this.powerUpsCollected = Math.max(0, Math.floor(data.killerBounty));
+                            this.updateLocalBounty(false);
+                            this.updateHUD();
+                        }
                         if (!this.isLocalPlayer(data.victimId)) {
                             const victimShip = this.otherPlayers.get(data.victimId);
                             if (victimShip) {
@@ -1972,7 +1979,8 @@
                 const dy = bullet.pos.y - player.pos.y;
                 const distance = Math.sqrt(dx * dx + dy * dy);
                 const playerHitRadius = player.hitRadius !== undefined ? player.hitRadius : player.size;
-                return distance < (bullet.size * 0.5) + (playerHitRadius * 0.5);
+                const bulletRadius = bullet.size * 0.5;
+                return distance < bulletRadius + playerHitRadius;
             }
 
             applyDamageToPlayerShip(damage, source = null) {
@@ -2092,7 +2100,23 @@
             handlePlayerDeath(killerInfo) {
                 const killerId = killerInfo && killerInfo.attackerId ? killerInfo.attackerId : null;
                 const victimBounty = this.powerUpsCollected;
-                const killerBounty = killerId ? this.getPlayerBounty(killerId) : null;
+
+                let killerBounty = null;
+                const isValidKillOpponent = killerId && killerId !== this.playerId;
+                if (isValidKillOpponent) {
+                    const currentKillerBounty = this.getPlayerBounty(killerId);
+                    const bonus = Number.isFinite(this.killBountyBonus) ? this.killBountyBonus : 0;
+                    const base = Number.isFinite(currentKillerBounty) ? currentKillerBounty : 0;
+                    const inherited = Number.isFinite(victimBounty) ? victimBounty : null;
+
+                    killerBounty = base + bonus;
+                    if (inherited !== null) {
+                        killerBounty = Math.max(killerBounty, inherited);
+                    }
+                    killerBounty = Math.max(0, Math.floor(killerBounty));
+
+                    this.setPlayerBounty(killerId, killerBounty);
+                }
 
                 this.setPlayerBounty(this.playerId, victimBounty);
 

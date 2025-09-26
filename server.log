@@ -1,0 +1,44 @@
+
+> subspace-commander@1.0.0 start
+> node server.js
+
+HTTPS server running on https://0.0.0.0:8443
+WebSocket server running on wss://0.0.0.0:8443
+(node:29237) Warning: An error event has already been emitted on the socket. Please use the destroy method on the socket while handling a 'clientError' event.
+(Use `node --trace-warnings ...` to show where the warning was created)
+Player 8ptspew4i connected from 65.130.5.130
+Player 401bs0w5x connected from 65.130.5.130
+Player 8ptspew4i disconnected
+Player 6347hx5p7 connected from 65.130.5.130
+Player 401bs0w5x disconnected
+Player rn1xadmzw connected from 65.130.5.130
+Player 6347hx5p7 disconnected
+Player db4iou7gk connected from 65.130.5.130
+Player db4iou7gk disconnected
+Player sp8qsd057 connected from 65.130.5.130
+Player sp8qsd057 disconnected
+Player 9wcqnpxxp connected from 65.130.5.130
+Player 9wcqnpxxp disconnected
+Player u9vndomtj connected from 65.130.5.130
+Player u9vndomtj disconnected
+Player w8hy82y2y connected from 65.130.5.130
+Player rn1xadmzw disconnected
+Player i4ynskpf4 connected from 65.130.5.130
+Player w8hy82y2y disconnected
+Player ke35mlwk9 connected from 65.130.5.130
+Player ke35mlwk9 disconnected
+Player i4ynskpf4 disconnected
+Player jxtzecqbv connected from 65.130.5.130
+Player kk0wtsobt connected from 65.130.5.130
+Player kk0wtsobt disconnected
+Player jxtzecqbv disconnected
+Player o8y6yepf9 connected from 65.130.5.130
+Player svbn7590a connected from 65.130.5.130
+Player svbn7590a disconnected
+Player o8y6yepf9 disconnected
+Player g2uo50uks connected from 65.130.5.130
+Player nfffvtknz connected from 65.130.5.130
+Player nfffvtknz disconnected
+Player g2uo50uks disconnected
+Player glbc8kqq0 connected from 65.130.5.130
+Player lj27scuwh connected from 65.130.5.130
