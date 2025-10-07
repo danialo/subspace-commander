@@ -19,10 +19,30 @@ app.use(express.static(__dirname));
 
 const wss = new WebSocket.Server({ server });
 const players = new Map();
+const SHIP_SELECTION_ENABLED = false;
+const DEFAULT_SHIP_TYPE = 1;
+const WORLD_WIDTH = 8000;
+const WORLD_HEIGHT = 5200;
+const DEFAULT_MAX_ENERGY = 1100;
+const SAFE_ZONE = {
+    x: WORLD_WIDTH / 2,
+    y: WORLD_HEIGHT / 2,
+    radius: 250
+};
+const ENERGY_TOLERANCE = 1;
 
 wss.on('connection', function connection(ws, req) {
     const playerId = Math.random().toString(36).substr(2, 9);
-    players.set(playerId, { ws, id: playerId, x: 4000, y: 3000, bounty: 0, shipType: 1 });
+    players.set(playerId, {
+        ws,
+        id: playerId,
+        x: SAFE_ZONE.x,
+        y: SAFE_ZONE.y,
+        bounty: 0,
+        shipType: DEFAULT_SHIP_TYPE,
+        energy: DEFAULT_MAX_ENERGY,
+        maxEnergy: DEFAULT_MAX_ENERGY
+    });
 
     console.log(`Player ${playerId} connected from ${req.socket.remoteAddress}`);
 
@@ -43,7 +63,9 @@ wss.on('connection', function connection(ws, req) {
     ws.send(JSON.stringify({
         type: 'init',
         playerId: playerId,
-        players: existingPlayers
+        players: existingPlayers,
+        safeZone: SAFE_ZONE,
+        world: { width: WORLD_WIDTH, height: WORLD_HEIGHT }
     }));
 
     // Notify other players about new player
@@ -51,8 +73,8 @@ wss.on('connection', function connection(ws, req) {
         type: 'playerJoined',
         player: {
             id: playerId,
-            x: 4000,
-            y: 3000,
+            x: SAFE_ZONE.x,
+            y: SAFE_ZONE.y,
             bounty: players.get(playerId).bounty || 0,
             shipType: players.get(playerId).shipType || 1
         }
@@ -73,7 +95,24 @@ wss.on('connection', function connection(ws, req) {
                 if (player) {
                     if (typeof message.x === 'number') player.x = message.x;
                     if (typeof message.y === 'number') player.y = message.y;
+<<<<<<< Updated upstream
                     if (typeof message.shipType === 'number') player.shipType = message.shipType;
+=======
+                    if (typeof message.shipType === 'number') {
+                        player.shipType = SHIP_SELECTION_ENABLED ? message.shipType : DEFAULT_SHIP_TYPE;
+                        if (!SHIP_SELECTION_ENABLED) {
+                            message.shipType = DEFAULT_SHIP_TYPE;
+                        }
+                    } else if (!SHIP_SELECTION_ENABLED) {
+                        message.shipType = DEFAULT_SHIP_TYPE;
+                    }
+                    if (Number.isFinite(Number(message.energy))) {
+                        player.energy = Number(message.energy);
+                    }
+                    if (Number.isFinite(Number(message.maxEnergy))) {
+                        player.maxEnergy = Number(message.maxEnergy);
+                    }
+>>>>>>> Stashed changes
                 }
                 // Broadcast to all other players
                 const updateData = {
@@ -85,6 +124,119 @@ wss.on('connection', function connection(ws, req) {
                 players.forEach((player, id) => {
                     if (id !== playerId && player.ws.readyState === WebSocket.OPEN) {
                         player.ws.send(JSON.stringify(updateData));
+                    }
+                });
+            } else if (message.type === 'bomb') {
+                const bombData = {
+                    type: 'bomb',
+                    playerId,
+                    x: Number(message.x),
+                    y: Number(message.y),
+                    vx: Number(message.vx),
+                    vy: Number(message.vy),
+                    bombType: message.bombType,
+                    color: message.color,
+                    weaponLevel: message.weaponLevel,
+                    isMine: !!message.isMine,
+                    createdAt: message.createdAt,
+                    bombId: message.bombId
+                };
+
+                if (!Number.isFinite(bombData.x) || !Number.isFinite(bombData.y) ||
+                    !Number.isFinite(bombData.vx) || !Number.isFinite(bombData.vy)) {
+                    return;
+                }
+
+                players.forEach((playerEntry, id) => {
+                    if (id !== playerId && playerEntry.ws.readyState === WebSocket.OPEN) {
+                        playerEntry.ws.send(JSON.stringify(bombData));
+                    }
+                });
+            } else if (message.type === 'burst') {
+                const burstX = Number(message.x);
+                const burstY = Number(message.y);
+                if (!Number.isFinite(burstX) || !Number.isFinite(burstY)) {
+                    return;
+                }
+
+                const burstData = {
+                    type: 'burst',
+                    playerId,
+                    x: burstX,
+                    y: burstY,
+                    radius: Number(message.radius),
+                    force: Number(message.force),
+                    shipSpeedMultiplier: Number(message.shipSpeedMultiplier),
+                    bombSpeedCap: Number(message.bombSpeedCap),
+                    bulletSpeedCap: Number(message.bulletSpeedCap),
+                    shipBoostDuration: Number(message.shipBoostDuration)
+                };
+
+                players.forEach((playerEntry) => {
+                    if (playerEntry.ws.readyState === WebSocket.OPEN) {
+                        playerEntry.ws.send(JSON.stringify(burstData));
+                    }
+                });
+            } else if (message.type === 'warpToSafe') {
+                const player = players.get(playerId);
+                if (!player) {
+                    return;
+                }
+
+                const reportedEnergy = Number(message.energy);
+                if (Number.isFinite(reportedEnergy)) {
+                    player.energy = reportedEnergy;
+                }
+                const reportedMaxEnergy = Number(message.maxEnergy);
+                if (Number.isFinite(reportedMaxEnergy)) {
+                    player.maxEnergy = reportedMaxEnergy;
+                }
+
+                const effectiveMaxEnergy = Number.isFinite(player.maxEnergy) ? player.maxEnergy : DEFAULT_MAX_ENERGY;
+                const effectiveEnergy = Number.isFinite(player.energy) ? player.energy : effectiveMaxEnergy;
+                const tolerance = Math.max(ENERGY_TOLERANCE, effectiveMaxEnergy * 0.001);
+
+                if (!Number.isFinite(effectiveEnergy) || effectiveEnergy + tolerance < effectiveMaxEnergy) {
+                    if (player.ws.readyState === WebSocket.OPEN) {
+                        player.ws.send(JSON.stringify({
+                            type: 'warpDenied',
+                            reason: 'insufficientEnergy'
+                        }));
+                    }
+                    return;
+                }
+
+                player.x = SAFE_ZONE.x;
+                player.y = SAFE_ZONE.y;
+
+                const warpData = {
+                    type: 'playerWarped',
+                    playerId,
+                    x: SAFE_ZONE.x,
+                    y: SAFE_ZONE.y,
+                    energy: effectiveEnergy,
+                    maxEnergy: effectiveMaxEnergy,
+                    serverTimestamp: Date.now()
+                };
+
+                players.forEach((playerEntry) => {
+                    if (playerEntry.ws.readyState === WebSocket.OPEN) {
+                        playerEntry.ws.send(JSON.stringify(warpData));
+                    }
+                });
+            } else if (message.type === 'mineDislodged') {
+                const bombId = typeof message.bombId === 'string' ? message.bombId : null;
+                if (!bombId) {
+                    return;
+                }
+                const notice = {
+                    type: 'mineDislodged',
+                    bombId,
+                    playerId
+                };
+                players.forEach((playerEntry) => {
+                    if (playerEntry.ws.readyState === WebSocket.OPEN) {
+                        playerEntry.ws.send(JSON.stringify(notice));
                     }
                 });
             } else if (message.type === 'playerDamage') {

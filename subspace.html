@@ -271,6 +271,9 @@
     </div>
 
     <script>
+        const WORLD_WIDTH = 8000;
+        const WORLD_HEIGHT = 5200;
+
         // Ship Configuration System
         class ShipConfig {
             constructor() {
@@ -449,6 +452,8 @@
                 this.wallCount = 0; // Number of deployable walls
                 this.shieldActive = false;
                 this.shieldTimer = 0;
+                this.repelBoostTimer = 0;
+                this.repelSpeedMultiplierActive = 1;
 
                 // Calculate current stats based on levels
                 this.updateStatsFromLevels();
@@ -598,6 +603,10 @@
                     this.fireBomb();
                 }
 
+                if (input.deployMine && this.gunTimeout <= 0 && this.energy >= this.getBombEnergy()) {
+                    this.deployMine();
+                }
+
                 // Deploy wall
                 if (input.deployWall && this.wallCount > 0 && this.gunTimeout <= 0) {
                     this.deployWall();
@@ -652,6 +661,8 @@
 
                 // Create bomb with ship velocity + bomb velocity
                 const ownerId = (window.game && window.game.playerId) ? window.game.playerId : 'local';
+                const bombId = window.game ? window.game.generateEntityId('bomb') : `bomb_${Date.now()}`;
+                const createdAt = Date.now();
                 const bomb = new Bomb(
                     this.pos.x + Math.sin(this.angle) * this.size,
                     this.pos.y + -Math.cos(this.angle) * this.size,
@@ -659,7 +670,8 @@
                     this.vel.y + -Math.cos(this.angle) * 300,
                     this.bulletType === 'yellow' ? 'yellow' : 'red', // Only red and yellow bombs
                     this.weaponLevel, // Pass weapon level for bouncing logic
-                    ownerId
+                    ownerId,
+                    { id: bombId, createdAt }
                 );
 
                 // Add to game's bomb array (we'll need to pass this reference)
@@ -675,10 +687,60 @@
                             y: bomb.pos.y,
                             vx: bomb.vel.x,
                             vy: bomb.vel.y,
+                            bombType: bomb.bombType,
                             color: bomb.color,
-                            weaponLevel: this.weaponLevel
+                            weaponLevel: this.weaponLevel,
+                            bombId: bomb.id,
+                            createdAt: bomb.createdAt
                         });
                     }
+                }
+            }
+
+            deployMine() {
+                const mineEnergy = this.getBombEnergy();
+                if (this.energy < mineEnergy || !window.game) {
+                    return;
+                }
+
+                const ownerId = window.game.playerId ? window.game.playerId : 'local';
+                if (window.game.countActiveMines(ownerId) >= window.game.mineLimit) {
+                    return;
+                }
+
+                this.energy -= mineEnergy;
+                this.gunTimeout = this.gunTimeoutDefault * 2;
+                const mineId = window.game.generateEntityId('mine');
+                const createdAt = Date.now();
+
+                const mine = new Bomb(
+                    this.pos.x,
+                    this.pos.y,
+                    0,
+                    0,
+                    this.bulletType === 'yellow' ? 'yellow' : 'red',
+                    this.weaponLevel,
+                    ownerId,
+                    { isMine: true, id: mineId, createdAt }
+                );
+
+                window.game.bombs.push(mine);
+
+                if (window.game.isMultiplayer) {
+                    window.game.sendMultiplayerMessage({
+                        type: 'bomb',
+                        playerId: ownerId,
+                        x: mine.pos.x,
+                        y: mine.pos.y,
+                        vx: 0,
+                        vy: 0,
+                        bombType: mine.bombType,
+                        color: mine.color,
+                        weaponLevel: this.weaponLevel,
+                        isMine: true,
+                        bombId: mine.id,
+                        createdAt: mine.createdAt
+                    });
                 }
             }
 
@@ -711,18 +773,9 @@
                 this.energy -= burstEnergy;
                 this.burstTimeout = this.burstTimeoutDefault;
 
-                // Create burst effect
                 if (window.game) {
-                    window.game.createBurst(this.pos.x, this.pos.y);
-
-                    // Send burst to multiplayer server if connected
-                    if (window.game.isMultiplayer) {
-                        window.game.sendMultiplayerMessage({
-                            type: 'burst',
-                            x: this.pos.x,
-                            y: this.pos.y
-                        });
-                    }
+                    const sourceId = window.game.playerId || 'local';
+                    window.game.triggerRepel(this.pos.x, this.pos.y, sourceId, true);
                 }
             }
 
@@ -742,6 +795,12 @@
                 }
                 if (this.burstTimeout > 0) {
                     this.burstTimeout -= deltaTime;
+                }
+                if (this.repelBoostTimer > 0) {
+                    this.repelBoostTimer = Math.max(0, this.repelBoostTimer - deltaTime);
+                    if (this.repelBoostTimer <= 0) {
+                        this.repelSpeedMultiplierActive = 1;
+                    }
                 }
 
                 // Energy recharge (based on current upgrade level)
@@ -768,18 +827,22 @@
                 }
 
                 // Apply velocity limits
-                const speedCap = this.maxSpeed * (this.boostActive ? this.boostSpeedMultiplier : 1);
+                let speedMultiplier = this.boostActive ? this.boostSpeedMultiplier : 1;
+                if (this.repelBoostTimer > 0) {
+                    speedMultiplier = Math.max(speedMultiplier, this.repelSpeedMultiplierActive);
+                }
+                const speedCap = this.maxSpeed * speedMultiplier;
                 this.vel.clamp(speedCap);
 
                 // Update position (apply velocity scaled by deltaTime for proper units)
                 this.pos.add(new Vector2D(this.vel.x * deltaTime, this.vel.y * deltaTime));
 
-                // Clamp ship to world boundaries (8000 x 6000)
+                // Clamp ship to world boundaries
                 const margin = this.size; // Ship's collision radius
                 const oldX = this.pos.x;
                 const oldY = this.pos.y;
-                this.pos.x = Math.max(margin, Math.min(8000 - margin, this.pos.x));
-                this.pos.y = Math.max(margin, Math.min(6000 - margin, this.pos.y));
+                this.pos.x = Math.max(margin, Math.min(WORLD_WIDTH - margin, this.pos.x));
+                this.pos.y = Math.max(margin, Math.min(WORLD_HEIGHT - margin, this.pos.y));
 
                 // Stop velocity when hitting boundaries to prevent visual issues
                 if (oldX !== this.pos.x) {
@@ -1113,8 +1176,8 @@
                     this.pos.x = 0;
                     this.vel.x = Math.abs(this.vel.x);
                     shouldBounce = true;
-                } else if (this.pos.x > 8000) {
-                    this.pos.x = 8000;
+                } else if (this.pos.x > WORLD_WIDTH) {
+                    this.pos.x = WORLD_WIDTH;
                     this.vel.x = -Math.abs(this.vel.x);
                     shouldBounce = true;
                 }
@@ -1123,8 +1186,8 @@
                     this.pos.y = 0;
                     this.vel.y = Math.abs(this.vel.y);
                     shouldBounce = true;
-                } else if (this.pos.y > 6000) {
-                    this.pos.y = 6000;
+                } else if (this.pos.y > WORLD_HEIGHT) {
+                    this.pos.y = WORLD_HEIGHT;
                     this.vel.y = -Math.abs(this.vel.y);
                     shouldBounce = true;
                 }
@@ -1238,7 +1301,8 @@
 
         // Bomb class
         class Bomb {
-            constructor(x, y, vx, vy, bombType = 'red', weaponLevel = 0, ownerId = null) {
+            constructor(x, y, vx, vy, bombType = 'red', weaponLevel = 0, ownerId = null, options = {}) {
+                options = options || {};
                 this.pos = new Vector2D(x, y);
                 this.vel = new Vector2D(vx, vy);
                 this.bombType = bombType;
@@ -1252,6 +1316,11 @@
                 this.ownerId = ownerId;
                 this.age = 0; // Track how long the bomb has been active
                 this.armDelay = 0.35; // Give the bomb time to leave the firing ship
+                this.isMine = !!options.isMine;
+                this.isDislodged = !!options.isDislodged;
+                this.createdAt = Number.isFinite(options.createdAt) ? options.createdAt : Date.now();
+                this.id = typeof options.id === 'string' ? options.id : null;
+                this.repelGrace = Number.isFinite(options.repelGrace) ? options.repelGrace : 0;
 
                 // Bomb properties based on type
                 const bombConfig = {
@@ -1285,30 +1354,39 @@
             update(deltaTime) {
                 if (!this.exploded) {
                     this.age += deltaTime;
+                    if (this.repelGrace > 0) {
+                        this.repelGrace = Math.max(0, this.repelGrace - deltaTime);
+                    }
+                    if (this.isMine && !this.isDislodged) {
+                        this.vel.x = 0;
+                        this.vel.y = 0;
+                        return;
+                    }
+
                     this.pos.add(new Vector2D(this.vel.x * deltaTime, this.vel.y * deltaTime));
                     // Bombs don't expire on their own - they travel across the entire map
 
                     // Check for world edge collisions
                     let shouldBounce = false;
-                    if (this.pos.x < 0) {
-                        this.pos.x = 0;
-                        this.vel.x = Math.abs(this.vel.x);
-                        shouldBounce = true;
-                    } else if (this.pos.x > 8000) {
-                        this.pos.x = 8000;
-                        this.vel.x = -Math.abs(this.vel.x);
-                        shouldBounce = true;
-                    }
+                if (this.pos.x < 0) {
+                    this.pos.x = 0;
+                    this.vel.x = Math.abs(this.vel.x);
+                    shouldBounce = true;
+                } else if (this.pos.x > WORLD_WIDTH) {
+                    this.pos.x = WORLD_WIDTH;
+                    this.vel.x = -Math.abs(this.vel.x);
+                    shouldBounce = true;
+                }
 
-                    if (this.pos.y < 0) {
-                        this.pos.y = 0;
-                        this.vel.y = Math.abs(this.vel.y);
-                        shouldBounce = true;
-                    } else if (this.pos.y > 6000) {
-                        this.pos.y = 6000;
-                        this.vel.y = -Math.abs(this.vel.y);
-                        shouldBounce = true;
-                    }
+                if (this.pos.y < 0) {
+                    this.pos.y = 0;
+                    this.vel.y = Math.abs(this.vel.y);
+                    shouldBounce = true;
+                } else if (this.pos.y > WORLD_HEIGHT) {
+                    this.pos.y = WORLD_HEIGHT;
+                    this.vel.y = -Math.abs(this.vel.y);
+                    shouldBounce = true;
+                }
 
                     if (shouldBounce) {
                         if (this.bounceCount < this.maxBounces) {
@@ -1357,11 +1435,14 @@
 
             draw(ctx, viewport) {
                 if (!this.exploded) {
-                    // Draw the bomb (no fading since they don't have lifetime limits)
                     const screenPos = viewport.worldToScreen(this.pos.x, this.pos.y);
+                    const speed = Math.sqrt(this.vel.x * this.vel.x + this.vel.y * this.vel.y);
+                    const baseRadius = this.size;
+                    const minRadius = Math.max(2, baseRadius * 0.4);
+                    const radius = speed > 600 ? Math.max(minRadius, baseRadius * (800 / (speed + 400))) : baseRadius;
                     ctx.fillStyle = this.color;
                     ctx.beginPath();
-                    ctx.arc(screenPos.x, screenPos.y, this.size, 0, Math.PI * 2);
+                    ctx.arc(screenPos.x, screenPos.y, radius, 0, Math.PI * 2);
                     ctx.fill();
                 } else {
                     // Draw shrapnel
@@ -1543,8 +1624,8 @@
                 this.zoom = 1;
 
                 // World size (much larger than viewport)
-                this.worldWidth = 8000;
-                this.worldHeight = 6000;
+                this.worldWidth = WORLD_WIDTH;
+                this.worldHeight = WORLD_HEIGHT;
             }
 
             follow(entity) {
@@ -1692,6 +1773,17 @@
 
                 // Weapons system
                 this.bombs = [];
+                this.mineLimit = 5;
+                this.entityIdCounter = 1;
+                this.repelRadius = 2200;
+                this.repelForce = 1800;
+                this.repelShipSpeedMultiplier = 4.5;
+                this.repelBombSpeedCap = 900;
+                this.repelBulletSpeedCap = 1100;
+                this.repelShipBoostDuration = 1.2;
+                this.repelBombSpeedCap = 900;
+                this.repelBulletSpeedCap = 1100;
+                this.repelShipBoostDuration = 1.2;
 
                 // Walls system
                 this.walls = [];
@@ -1712,6 +1804,7 @@
                     brake: false,
                     boost: false,
                     fire: false,
+                    deployMine: false,
                     bomb: false,
                     deployWall: false,
                     burst: false
@@ -1783,6 +1876,21 @@
                         this.playerId = data.playerId;
                         this.playerBounties.delete('local');
                         this.setPlayerBounty(this.playerId, this.powerUpsCollected);
+                        if (data.world) {
+                            if (Number.isFinite(data.world.width)) {
+                                this.viewport.worldWidth = data.world.width;
+                            }
+                            if (Number.isFinite(data.world.height)) {
+                                this.viewport.worldHeight = data.world.height;
+                            }
+                        }
+                        if (data.safeZone && Number.isFinite(data.safeZone.x) && Number.isFinite(data.safeZone.y) && Number.isFinite(data.safeZone.radius)) {
+                            this.safeZone = {
+                                x: data.safeZone.x,
+                                y: data.safeZone.y,
+                                radius: data.safeZone.radius
+                            };
+                        }
                         data.players.forEach(player => {
                             if (player.id !== this.playerId) {
                                 const shipType = Number.isFinite(player.shipType) ? player.shipType : 1;
@@ -1840,12 +1948,45 @@
                                 data.y,
                                 data.vx,
                                 data.vy,
-                                data.color,
+                                typeof data.bombType === 'string' ? data.bombType : (typeof data.color === 'string' && data.color.indexOf('ff') >= 0 ? 'yellow' : 'red'),
                                 data.weaponLevel || 0,
-                                data.playerId
+                                data.playerId,
+                                {
+                                    isMine: !!data.isMine,
+                                    createdAt: data.createdAt,
+                                    id: data.bombId
+                                }
                             );
                             this.bombs.push(bomb);
                         }
+                        break;
+                    case 'playerWarped':
+                        if (data && data.playerId) {
+                            const warpPlayerId = data.playerId;
+                            const warpX = Number(data.x);
+                            const warpY = Number(data.y);
+                            if (Number.isFinite(warpX) && Number.isFinite(warpY)) {
+                                this.performLocalWarp(warpPlayerId);
+                                const ship = warpPlayerId === this.playerId ? this.playerShip : this.otherPlayers.get(warpPlayerId);
+                                if (ship) {
+                                    ship.pos.x = warpX;
+                                    ship.pos.y = warpY;
+                                }
+                            }
+                            if (warpPlayerId === this.playerId) {
+                                const ship = this.playerShip;
+                                if (ship && Number.isFinite(Number(data.energy))) {
+                                    ship.energy = Number(data.energy);
+                                }
+                                if (ship && Number.isFinite(Number(data.maxEnergy))) {
+                                    ship.maxEnergy = Number(data.maxEnergy);
+                                }
+                                this.updateHUD();
+                            }
+                        }
+                        break;
+                    case 'warpDenied':
+                        // Ignore for now or display notice
                         break;
 
                     case 'wall':
@@ -1857,8 +1998,19 @@
                         break;
 
                     case 'burst':
-                        if (data.playerId !== this.playerId) {
-                            this.applyBurst(data.x, data.y);
+                        if (data && data.playerId !== this.playerId) {
+                            const burstX = Number(data.x);
+                            const burstY = Number(data.y);
+                            if (Number.isFinite(burstX) && Number.isFinite(burstY)) {
+                                this.triggerRepel(burstX, burstY, data.playerId || null, false, {
+                                    radius: Number(data.radius),
+                                    force: Number(data.force),
+                                    shipSpeedMultiplier: Number(data.shipSpeedMultiplier),
+                                    bombSpeedCap: Number(data.bombSpeedCap),
+                                    bulletSpeedCap: Number(data.bulletSpeedCap),
+                                    shipBoostDuration: Number(data.shipBoostDuration)
+                                });
+                            }
                         }
                         break;
                     case 'playerDamage':
@@ -1871,6 +2023,10 @@
                         break;
                     case 'bombDamage':
                         if (data.targetId === this.playerId) {
+                            const localOwnerId = this.playerId || 'local';
+                            if (data.isMine && data.attackerId && data.attackerId === localOwnerId) {
+                                break;
+                            }
                             this.applyDamageToPlayerShip(
                                 data.damage || 0,
                                 {
@@ -1884,6 +2040,16 @@
                     case 'bombExplosion':
                         // Create visual explosion effect and shrapnel
                         this.createRemoteBombExplosion(data.x, data.y, data.bombType);
+                        break;
+                    case 'mineDislodged':
+                        if (data && typeof data.bombId === 'string') {
+                            const bomb = this.bombs.find(b => b && b.id === data.bombId);
+                            if (bomb) {
+                                bomb.isMine = false;
+                                bomb.isDislodged = true;
+                                bomb.repelGrace = Math.max(bomb.repelGrace || 0, 0.4);
+                            }
+                        }
                         break;
                     case 'playerKilled':
                         if (Number.isFinite(data.victimBounty)) {
@@ -1978,7 +2144,9 @@
                     y: this.playerShip.pos.y,
                     rotation: this.playerShip.angle,
                     thrust: !!(this.input && this.input.thrust),
-                    shipType: this.playerShip.shipType
+                    shipType,
+                    energy: this.playerShip.energy,
+                    maxEnergy: this.playerShip.maxEnergy
                 });
 
                 this.lastBroadcastState = {
@@ -2004,18 +2172,27 @@
                 if (Number.isFinite(data.rotation)) {
                     player.angle = data.rotation;
                 }
-                if (Number.isFinite(data.shipType)) {
+                if (Number.isFinite(data.energy)) {
+                    player.energy = data.energy;
+                }
+                if (Number.isFinite(data.maxEnergy)) {
+                    player.maxEnergy = data.maxEnergy;
+                }
+                if (Number.isFinite(data.shipType) && this.shipSelectionEnabled) {
                     player.shipType = data.shipType;
                     player.updateStatsFromLevels();
                 }
             }
 
             checkBulletPlayerCollision(bullet, player) {
+                if (!bullet || !player || !bullet.pos || !player.pos) {
+                    return false;
+                }
                 const dx = bullet.pos.x - player.pos.x;
                 const dy = bullet.pos.y - player.pos.y;
                 const distance = Math.sqrt(dx * dx + dy * dy);
                 const playerHitRadius = player.hitRadius !== undefined ? player.hitRadius : player.size;
-                const bulletRadius = bullet.size * 0.5;
+                const bulletRadius = (bullet.size || 4) * 0.5;
                 return distance < bulletRadius + playerHitRadius;
             }
 
@@ -2285,8 +2462,16 @@
                 }, 3000);
             }
 
-            checkBombPlayerProximity(bomb, player, radius) {
+            checkBombPlayerProximity(bomb, player, radius, playerId = null) {
                 if (bomb.age !== undefined && bomb.age < bomb.armDelay) {
+                    return false;
+                }
+
+                if (bomb && bomb.isMine && bomb.ownerId && playerId && bomb.ownerId === playerId) {
+                    return false;
+                }
+
+                if (bomb && Number.isFinite(bomb.repelGrace) && bomb.repelGrace > 0) {
                     return false;
                 }
 
@@ -2324,7 +2509,8 @@
                     explosionRadius,
                     bomb.damage,
                     bomb.ownerId,
-                    bomb.bombType
+                    bomb.bombType,
+                    bomb.isMine
                 );
 
                 // Send explosion to multiplayer
@@ -2332,17 +2518,22 @@
                     type: 'bombExplosion',
                     x: bomb.pos.x,
                     y: bomb.pos.y,
-                    bombType: bomb.bombType
+                    bombType: bomb.bombType,
+                    ownerId: bomb.ownerId || null,
+                    isMine: !!bomb.isMine
                 });
             }
 
-            damagePlayersInRadius(x, y, radius, baseDamage, ownerId = null, bombType = null) {
+            damagePlayersInRadius(x, y, radius, baseDamage, ownerId = null, bombType = null, isMine = false) {
                 // Damage local player
                 const localDx = this.playerShip.pos.x - x;
                 const localDy = this.playerShip.pos.y - y;
                 const localDistance = Math.sqrt(localDx * localDx + localDy * localDy);
 
-                if (localDistance < radius && !this.isInSafeZone(this.playerShip.pos.x, this.playerShip.pos.y)) {
+                const localOwnerId = this.playerId || 'local';
+                const skipLocal = isMine && ownerId && ownerId === localOwnerId;
+
+                if (!skipLocal && localDistance < radius && !this.isInSafeZone(this.playerShip.pos.x, this.playerShip.pos.y)) {
                     const damageMult = 1 - (localDistance / radius); // Closer = more damage
                     const finalDamage = Math.max(1, Math.floor(baseDamage * damageMult));
 
@@ -2360,6 +2551,9 @@
                     const distance = Math.sqrt(dx * dx + dy * dy);
 
                     if (distance < radius && !this.isInSafeZone(otherPlayer.pos.x, otherPlayer.pos.y)) {
+                        if (isMine && ownerId && ownerId === playerId) {
+                            continue;
+                        }
                         const damageMult = 1 - (distance / radius);
                         const finalDamage = Math.max(1, Math.floor(baseDamage * damageMult));
 
@@ -2368,7 +2562,8 @@
                             targetId: playerId,
                             attackerId: ownerId,
                             damage: finalDamage,
-                            bombType
+                            bombType,
+                            isMine
                         });
                     }
                 }
@@ -2552,6 +2747,11 @@
 
             setupEventListeners() {
                 document.addEventListener('keydown', (e) => {
+                    if (e.code === 'F7') {
+                        this.attemptWarpToSafeZone();
+                        e.preventDefault();
+                        return;
+                    }
                     this.keys[e.code] = true;
                     this.updateInput();
                     e.preventDefault();
@@ -2572,9 +2772,12 @@
                 this.input.thrust = this.keys['KeyW'] || this.keys['ArrowUp'];
                 this.input.reverse = this.keys['KeyS'] || this.keys['ArrowDown'];
                 this.input.brake = this.keys['Space'];
-                this.input.boost = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
+                const shiftHeld = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
+                this.input.boost = shiftHeld;
                 this.input.fire = this.keys['ControlLeft'] || this.keys['ControlRight'];
-                this.input.bomb = this.keys['Tab'];
+                const tabHeld = this.keys['Tab'];
+                this.input.deployMine = shiftHeld && tabHeld;
+                this.input.bomb = tabHeld && !shiftHeld;
                 this.input.deployWall = this.keys['F2'];
                 this.input.burst = this.keys['F3'];
 
@@ -2582,6 +2785,89 @@
                 if (this.keys['F12']) {
                     this.toggleConfigPanel();
                     this.keys['F12'] = false; // Prevent repeated toggles
+                }
+            }
+
+            attemptWarpToSafeZone() {
+                const ship = this.playerShip;
+                if (!ship || !this.safeZone) {
+                    return;
+                }
+
+                const maxEnergy = Number(ship.maxEnergy);
+                const energy = Number(ship.energy);
+                if (!Number.isFinite(maxEnergy) || !Number.isFinite(energy)) {
+                    return;
+                }
+
+                const tolerance = Math.max(1, maxEnergy * 0.001);
+                if (energy + tolerance < maxEnergy) {
+                    return;
+                }
+
+                this.performLocalWarp(this.playerId || 'local');
+                this.updateHUD();
+
+                if (this.isMultiplayer) {
+                    this.sendMultiplayerMessage({
+                        type: 'warpToSafe',
+                        energy,
+                        maxEnergy
+                    });
+                }
+            }
+
+            performLocalWarp(playerId) {
+                const ship = playerId === this.playerId ? this.playerShip : this.otherPlayers.get(playerId);
+                if (!ship || !this.safeZone) {
+                    return;
+                }
+
+                ship.pos.x = this.safeZone.x;
+                ship.pos.y = this.safeZone.y;
+                if (ship.vel) {
+                    ship.vel.x = 0;
+                    ship.vel.y = 0;
+                }
+                if (ship.boostActive !== undefined) {
+                    ship.boostActive = false;
+                }
+                if (ship.repelBoostTimer !== undefined) {
+                    ship.repelBoostTimer = 0;
+                    ship.repelSpeedMultiplierActive = 1;
+                }
+
+                if (playerId === this.playerId) {
+                    this.clearLocalOrdnance();
+                    this.lastBroadcastState.time = 0;
+                    this.lastBroadcastState.x = ship.pos.x;
+                    this.lastBroadcastState.y = ship.pos.y;
+                    this.lastBroadcastState.rotation = ship.angle;
+                    this.broadcastPlayerState(true);
+                } else {
+                    this.clearOrdnanceForPlayer(playerId);
+                }
+            }
+
+            clearLocalOrdnance() {
+                const ownerId = this.playerId || 'local';
+                this.clearOrdnanceForPlayer(ownerId);
+            }
+
+            clearOrdnanceForPlayer(playerId) {
+                if (!playerId) {
+                    return;
+                }
+                this.bombs = this.bombs.filter(bomb => !(bomb && bomb.ownerId === playerId));
+                const pruneBullets = (ship) => {
+                    if (!ship || !Array.isArray(ship.bullets)) {
+                        return;
+                    }
+                    ship.bullets = ship.bullets.filter(bullet => !(bullet && bullet.ownerId === playerId));
+                };
+                pruneBullets(this.playerShip);
+                for (const ship of this.otherPlayers.values()) {
+                    pruneBullets(ship);
                 }
             }
 
@@ -2647,6 +2933,21 @@
                 // Energy bar
                 const energyFill = document.getElementById('energyFill');
                 energyFill.style.width = (ship.energy / ship.maxEnergy * 100) + '%';
+            }
+
+            generateEntityId(prefix = 'ent') {
+                const counter = this.entityIdCounter = (this.entityIdCounter || 0) + 1;
+                return `${prefix}_${Date.now().toString(36)}_${counter.toString(36)}`;
+            }
+
+            countActiveMines(ownerId = null) {
+                const targetId = ownerId || this.playerId || 'local';
+                return this.bombs.reduce((acc, bomb) => {
+                    if (!bomb || !bomb.isMine || bomb.exploded) {
+                        return acc;
+                    }
+                    return bomb.ownerId === targetId ? acc + 1 : acc;
+                }, 0);
             }
 
             draw() {
@@ -2855,54 +3156,201 @@
                 this.ctx.setLineDash([]);
             }
 
-            createBurst(x, y) {
-                const burstRadius = 150;
-                const burstForce = 800;
+            triggerRepel(x, y, sourceId = null, replicate = false, override = {}) {
+                const config = {
+                    radius: Number.isFinite(override.radius) ? override.radius : this.repelRadius,
+                    force: Number.isFinite(override.force) ? override.force : this.repelForce,
+                    shipSpeedMultiplier: Number.isFinite(override.shipSpeedMultiplier) ? override.shipSpeedMultiplier : this.repelShipSpeedMultiplier,
+                    bombSpeedCap: Number.isFinite(override.bombSpeedCap) ? override.bombSpeedCap : this.repelBombSpeedCap,
+                    bulletSpeedCap: Number.isFinite(override.bulletSpeedCap) ? override.bulletSpeedCap : this.repelBulletSpeedCap,
+                    shipBoostDuration: Number.isFinite(override.shipBoostDuration) ? override.shipBoostDuration : this.repelShipBoostDuration
+                };
 
-                // Push bombs away
-                for (const bomb of this.bombs) {
-                    const dx = bomb.pos.x - x;
-                    const dy = bomb.pos.y - y;
-                    const distance = Math.sqrt(dx * dx + dy * dy);
+                this.applyRepelForce(x, y, sourceId, config);
 
-                    if (distance < burstRadius && distance > 0) {
-                        const force = burstForce * (1 - distance / burstRadius);
-                        const pushX = (dx / distance) * force;
-                        const pushY = (dy / distance) * force;
-
-                        bomb.vel.x += pushX;
-                        bomb.vel.y += pushY;
-                    }
-                }
-
-                // Push bullets away
-                for (const ship of this.ships) {
-                    for (const bullet of ship.bullets) {
-                        const dx = bullet.pos.x - x;
-                        const dy = bullet.pos.y - y;
-                        const distance = Math.sqrt(dx * dx + dy * dy);
-
-                        if (distance < burstRadius && distance > 0) {
-                            const force = burstForce * (1 - distance / burstRadius);
-                            const pushX = (dx / distance) * force;
-                            const pushY = (dy / distance) * force;
-
-                            bullet.vel.x += pushX;
-                            bullet.vel.y += pushY;
-                        }
-                    }
-                }
-
-                // Create visual burst effect
                 this.burstEffects = this.burstEffects || [];
                 this.burstEffects.push({
-                    x: x,
-                    y: y,
+                    x,
+                    y,
                     radius: 0,
-                    maxRadius: burstRadius,
-                    lifetime: 0.8,
-                    maxLifetime: 0.8
+                    maxRadius: config.radius,
+                    lifetime: 0.9,
+                    maxLifetime: 0.9
                 });
+
+                if (replicate && this.isMultiplayer) {
+                    this.sendMultiplayerMessage({
+                        type: 'burst',
+                        x,
+                        y,
+                        radius: config.radius,
+                        force: config.force,
+                        shipSpeedMultiplier: config.shipSpeedMultiplier,
+                        bombSpeedCap: config.bombSpeedCap,
+                        bulletSpeedCap: config.bulletSpeedCap,
+                        shipBoostDuration: config.shipBoostDuration
+                    });
+                }
+            }
+
+            applyRepelForce(x, y, sourceId = null, config = {}) {
+                const radius = Number.isFinite(config.radius) ? config.radius : this.repelRadius;
+                const force = Number.isFinite(config.force) ? config.force : this.repelForce;
+                const shipMultiplier = Number.isFinite(config.shipSpeedMultiplier) ? config.shipSpeedMultiplier : this.repelShipSpeedMultiplier;
+                const bombCap = Number.isFinite(config.bombSpeedCap) ? config.bombSpeedCap : this.repelBombSpeedCap;
+                const bulletCap = Number.isFinite(config.bulletSpeedCap) ? config.bulletSpeedCap : this.repelBulletSpeedCap;
+                const boostDuration = Number.isFinite(config.shipBoostDuration) ? config.shipBoostDuration : this.repelShipBoostDuration;
+
+                if (!Number.isFinite(radius) || radius <= 0 || !Number.isFinite(force)) {
+                    return;
+                }
+
+                const radiusSq = radius * radius;
+                const effectiveSourceId = sourceId || (this.playerId || 'local');
+
+                const applyImpulse = (pos, vel, options = {}) => {
+                    if (!pos || !vel) {
+                        return null;
+                    }
+                    const dx = pos.x - x;
+                    const dy = pos.y - y;
+                    const distSq = dx * dx + dy * dy;
+                    if (distSq <= 0 || distSq > radiusSq) {
+                        return null;
+                    }
+                    const distance = Math.sqrt(distSq);
+                    if (distance <= 0) {
+                        return null;
+                    }
+                    const falloff = 1 - (distance / radius);
+                    if (falloff <= 0) {
+                        return null;
+                    }
+
+                    const nx = dx / distance;
+                    const ny = dy / distance;
+                    const impulse = force * 0.45 * Math.max(options.minStrength ?? 0.2, falloff);
+
+                    vel.x += nx * impulse;
+                    vel.y += ny * impulse;
+
+                    const displacement = (options.displacementFactor ?? 0.1) * radius * falloff;
+                    if (displacement > 0) {
+                        pos.x += nx * displacement;
+                        pos.y += ny * displacement;
+                    }
+
+                    const maxSpeed = Number.isFinite(options.maxSpeed) ? options.maxSpeed : null;
+                    if (maxSpeed) {
+                        const speedSq = vel.x * vel.x + vel.y * vel.y;
+                        const maxSpeedSq = maxSpeed * maxSpeed;
+                        if (speedSq > maxSpeedSq) {
+                            const scale = Math.sqrt(maxSpeedSq / speedSq);
+                            vel.x *= scale;
+                            vel.y *= scale;
+                        }
+                    }
+
+                    return {
+                        impulse,
+                        falloff,
+                        nx,
+                        ny
+                    };
+                };
+
+                const processShip = (ship, ownerId) => {
+                    if (!ship || !ship.pos || !ship.vel) {
+                        return;
+                    }
+                    if (ownerId && effectiveSourceId && ownerId === effectiveSourceId) {
+                        return;
+                    }
+                    if (this.safeZone && this.isInSafeZone(ship.pos.x, ship.pos.y)) {
+                        return;
+                    }
+                    const baseSpeed = Number.isFinite(ship.maxSpeed) ? ship.maxSpeed : null;
+                    const cap = baseSpeed ? baseSpeed * shipMultiplier : null;
+                const result = applyImpulse(ship.pos, ship.vel, {
+                    maxSpeed: cap,
+                    displacementFactor: 0.12,
+                    minStrength: 0.3
+                });
+                    if (result && baseSpeed) {
+                        const targetMultiplier = Math.max(shipMultiplier, 1 + result.falloff * (shipMultiplier * 0.6));
+                        ship.repelBoostTimer = Math.max(ship.repelBoostTimer || 0, boostDuration);
+                        ship.repelSpeedMultiplierActive = Math.max(ship.repelSpeedMultiplierActive || 1, targetMultiplier);
+                    }
+                };
+
+                processShip(this.playerShip, this.playerId || 'local');
+                for (const [playerId, ship] of this.otherPlayers.entries()) {
+                    processShip(ship, playerId);
+                }
+
+                const processBomb = (bomb) => {
+                    if (!bomb || !bomb.pos || !bomb.vel) {
+                        return;
+                    }
+                    if (this.safeZone && this.isInSafeZone(bomb.pos.x, bomb.pos.y)) {
+                        return;
+                    }
+                    if (effectiveSourceId && bomb.ownerId === effectiveSourceId && !bomb.isMine) {
+                        return;
+                    }
+                    if (bomb.isMine && effectiveSourceId && bomb.ownerId === effectiveSourceId && !bomb.isDislodged) {
+                        return;
+                    }
+                    const result = applyImpulse(bomb.pos, bomb.vel, {
+                        maxSpeed: bombCap,
+                    displacementFactor: 0.1,
+                    minStrength: 0.25
+                });
+                if (result) {
+                        if (bomb.isMine) {
+                            bomb.isMine = false;
+                            bomb.isDislodged = true;
+                            bomb.armDelay = Math.max(0.15, bomb.armDelay || 0.15);
+                            bomb.repelGrace = Math.max(bomb.repelGrace || 0, 0.6);
+                            if (this.isMultiplayer && bomb.id) {
+                                this.sendMultiplayerMessage({
+                                    type: 'mineDislodged',
+                                    bombId: bomb.id
+                                });
+                            }
+                        } else {
+                            bomb.repelGrace = Math.max(bomb.repelGrace || 0, 0.4);
+                        }
+                }
+            };
+
+                for (const bomb of this.bombs) {
+                    processBomb(bomb);
+                }
+
+                const processBullets = (ship) => {
+                    if (!ship || !Array.isArray(ship.bullets)) {
+                        return;
+                    }
+                    for (const bullet of ship.bullets) {
+                        if (!bullet || !bullet.pos || !bullet.vel || bullet.visualOnly) {
+                            continue;
+                        }
+                        if (effectiveSourceId && bullet.ownerId && bullet.ownerId === effectiveSourceId) {
+                            continue;
+                        }
+                        const result = applyImpulse(bullet.pos, bullet.vel, {
+                            maxSpeed: bulletCap,
+                            displacementFactor: 0.08,
+                            minStrength: 0.2
+                        });
+                    }
+                };
+
+                processBullets(this.playerShip);
+                for (const ship of this.otherPlayers.values()) {
+                    processBullets(ship);
+                }
             }
 
             setupConfigPanel() {
@@ -3123,14 +3571,14 @@
                         const proximityRadius = 60; // Bombs explode within 60 pixels
 
                         // Check proximity to local player
-                        if (this.checkBombPlayerProximity(bomb, this.playerShip, proximityRadius)) {
+                        if (this.checkBombPlayerProximity(bomb, this.playerShip, proximityRadius, this.playerId || 'local')) {
                             this.explodeBomb(bomb, i);
                             continue;
                         }
 
                         // Check proximity to other multiplayer players
                         for (const [playerId, otherPlayer] of this.otherPlayers) {
-                            if (this.checkBombPlayerProximity(bomb, otherPlayer, proximityRadius)) {
+                            if (this.checkBombPlayerProximity(bomb, otherPlayer, proximityRadius, playerId)) {
                                 this.explodeBomb(bomb, i);
                                 break;
                             }
