@@ -24,6 +24,10 @@ const DEFAULT_SHIP_TYPE = 1;
 const WORLD_WIDTH = 8000;
 const WORLD_HEIGHT = 5200;
 const DEFAULT_MAX_ENERGY = 1100;
+const PLAYFIELD_VERTICAL_MARGIN = 120;
+const PLAYFIELD_TOP = PLAYFIELD_VERTICAL_MARGIN;
+const PLAYFIELD_BOTTOM = WORLD_HEIGHT - PLAYFIELD_VERTICAL_MARGIN;
+const DEFAULT_SHIP_MARGIN = 20;
 const SAFE_ZONE = {
     x: WORLD_WIDTH / 2,
     y: WORLD_HEIGHT / 2,
@@ -39,6 +43,17 @@ function isInSafeZone(x, y) {
     const dx = x - SAFE_ZONE.x;
     const dy = y - SAFE_ZONE.y;
     return (dx * dx + dy * dy) <= SAFE_ZONE_RADIUS_SQUARED;
+}
+
+function clampShipPosition(x, y, margin = DEFAULT_SHIP_MARGIN) {
+    const minX = margin;
+    const maxX = WORLD_WIDTH - margin;
+    const minY = PLAYFIELD_TOP + margin;
+    const maxY = PLAYFIELD_BOTTOM - margin;
+
+    const clampedX = Math.max(minX, Math.min(maxX, Number.isFinite(x) ? x : SAFE_ZONE.x));
+    const clampedY = Math.max(minY, Math.min(maxY, Number.isFinite(y) ? y : SAFE_ZONE.y));
+    return { x: clampedX, y: clampedY };
 }
 
 wss.on('connection', function connection(ws, req) {
@@ -104,8 +119,11 @@ wss.on('connection', function connection(ws, req) {
             if (message.type === 'playerUpdate') {
                 const player = players.get(playerId);
                 if (player) {
-                    if (typeof message.x === 'number') player.x = message.x;
-                    if (typeof message.y === 'number') player.y = message.y;
+                    const clampedPos = clampShipPosition(message.x, message.y);
+                    player.x = clampedPos.x;
+                    player.y = clampedPos.y;
+                    message.x = player.x;
+                    message.y = player.y;
                     if (SHIP_SELECTION_ENABLED) {
                         const parsedShipType = Number(message.shipType);
                         if (Number.isFinite(parsedShipType)) {
@@ -165,6 +183,27 @@ wss.on('connection', function connection(ws, req) {
                 players.forEach((playerEntry, id) => {
                     if (id !== playerId && playerEntry.ws.readyState === WebSocket.OPEN) {
                         playerEntry.ws.send(JSON.stringify(bombData));
+                    }
+                });
+            } else if (message.type === 'bullet') {
+                const bulletData = {
+                    type: 'bullet',
+                    playerId,
+                    x: Number(message.x),
+                    y: Number(message.y),
+                    vx: Number(message.vx),
+                    vy: Number(message.vy),
+                    weaponLevel: Number(message.weaponLevel) || 0
+                };
+
+                if (!Number.isFinite(bulletData.x) || !Number.isFinite(bulletData.y) ||
+                    !Number.isFinite(bulletData.vx) || !Number.isFinite(bulletData.vy)) {
+                    return;
+                }
+
+                players.forEach((playerEntry, id) => {
+                    if (id !== playerId && playerEntry.ws.readyState === WebSocket.OPEN) {
+                        playerEntry.ws.send(JSON.stringify(bulletData));
                     }
                 });
             } else if (message.type === 'burst') {

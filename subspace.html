@@ -264,6 +264,28 @@
                 <div>Set upgrade levels directly</div>
                 <div>F12 to toggle panel</div>
             </div>
+
+            <hr style="border: none; border-top: 1px solid #044; margin: 12px 0;">
+
+            <h4 style="margin-bottom: 6px; text-align: center;">Power-Up Spawner</h4>
+            <div id="powerUpSpawner" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; font-size: 11px;">
+                <label><input type="checkbox" class="powerup-checkbox" value="energy"> Energy</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="speed"> Speed</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="weapons"> Weapons</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="shield"> Shield</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="recharge"> Recharge</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="thrust"> Thrust</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="rotation"> Rotation</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="wall"> Wall</label>
+            </div>
+
+            <div class="config-slider" style="margin-top: 10px;">
+                <label>Count <span class="value" id="spawnPowerUpCountValue">1</span></label>
+                <input type="number" id="spawnPowerUpCount" min="1" max="250" value="1" style="width: 100%;">
+            </div>
+
+            <button id="spawnPowerUpsBtn" style="width: 100%; padding: 6px; margin-top: 6px; background: #044; color: #0ff; border: 1px solid #0ff; cursor: pointer;">Spawn Selected Power-Ups</button>
+            <button id="clearPowerUpsBtn" style="width: 100%; padding: 6px; margin-top: 6px; background: #400; color: #f88; border: 1px solid #f88; cursor: pointer;">Clear Nearby Power-Ups</button>
         </div>
 
         <!-- Power-up messages container -->
@@ -273,6 +295,36 @@
     <script>
         const WORLD_WIDTH = 8000;
         const WORLD_HEIGHT = 5200;
+        const PLAYFIELD_TOP = 120;
+        const PLAYFIELD_BOTTOM = WORLD_HEIGHT - 120;
+        const UPGRADE_LIMITS = Object.freeze({
+            energyLevel: 5,
+            maxSpeedLevel: 10,
+            weaponLevel: 5,
+            rechargeLevel: 10,
+            thrustLevel: 10,
+            rotationLevel: 3,
+            wallCount: 10
+        });
+
+        function clampValue(value, min, max) {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+                return min;
+            }
+            const rounded = Math.floor(numeric);
+            return Math.max(min, Math.min(max, rounded));
+        }
+
+        function formatLevelDisplay(value, max) {
+            const clamped = clampValue(value, 0, max);
+            return clamped >= max ? `${clamped}★` : `${clamped}`;
+        }
+
+        function formatPercentDisplay(percent, isMax) {
+            const clampedPercent = Math.round(percent);
+            return isMax ? `${clampedPercent}%★` : `${clampedPercent}%`;
+        }
 
         // Ship Configuration System
         class ShipConfig {
@@ -475,6 +527,8 @@
             }
 
             updateStatsFromLevels() {
+                this.clampUpgradeLevels();
+
                 // Get ship-specific configuration
                 const config = window.shipConfig.getConfig(this.shipType);
 
@@ -493,7 +547,7 @@
                 const baseBulletCost = 67;
                 const energyCosts = [67, 75, 90, 100, 120, 140]; // Energy cost per level
                 this.fireEnergy = energyCosts[Math.min(this.weaponLevel, 5)] || baseBulletCost;
-                this.energyRecharge = baseEnergyRecharge * (1 + this.rechargeLevel * 2.0); // Much higher scaling for infinite green bullets
+                this.energyRecharge = baseEnergyRecharge * (1 + this.rechargeLevel * 1.0);
                 this.baseEnergyRecharge = baseEnergyRecharge;
                 const energyUseMultiplier = this.boostEnergyUseMultiplier || 3.0;
                 this.boostEnergyDrainPerSecond = this.energyRecharge * energyUseMultiplier;
@@ -506,6 +560,16 @@
 
                 // Debug log for bullet level changes
                 console.log(`Weapon Level: ${this.weaponLevel}, Bullet Type: ${this.bulletType}`);
+            }
+
+            clampUpgradeLevels() {
+                this.energyLevel = clampValue(this.energyLevel, 0, UPGRADE_LIMITS.energyLevel);
+                this.maxSpeedLevel = clampValue(this.maxSpeedLevel, 0, UPGRADE_LIMITS.maxSpeedLevel);
+                this.weaponLevel = clampValue(this.weaponLevel, 0, UPGRADE_LIMITS.weaponLevel);
+                this.rechargeLevel = clampValue(this.rechargeLevel, 0, UPGRADE_LIMITS.rechargeLevel);
+                this.thrustLevel = clampValue(this.thrustLevel, 0, UPGRADE_LIMITS.thrustLevel);
+                this.rotationLevel = clampValue(this.rotationLevel, 0, UPGRADE_LIMITS.rotationLevel);
+                this.wallCount = clampValue(this.wallCount, 0, UPGRADE_LIMITS.wallCount);
             }
 
             resetUpgrades() {
@@ -634,6 +698,11 @@
             }
 
             fire() {
+                // Check if ship is in safe zone - bullets cannot be fired from there
+                if (window.game && window.game.isInSafeZone && window.game.isInSafeZone(this.pos.x, this.pos.y)) {
+                    return;
+                }
+
                 this.energy -= this.fireEnergy;
                 this.gunTimeout = this.gunTimeoutDefault;
 
@@ -670,6 +739,11 @@
             }
 
             fireBomb() {
+                // Check if ship is in safe zone - bombs cannot be fired from there
+                if (window.game && window.game.isInSafeZone && window.game.isInSafeZone(this.pos.x, this.pos.y)) {
+                    return;
+                }
+
                 const bombEnergy = this.getBombEnergy();
                 this.energy -= bombEnergy;
                 this.gunTimeout = this.gunTimeoutDefault * 2; // Longer timeout for bombs
@@ -715,6 +789,11 @@
             deployMine() {
                 const mineEnergy = this.getBombEnergy();
                 if (this.energy < mineEnergy || !window.game) {
+                    return;
+                }
+
+                // Check if ship is in safe zone - mines cannot be deployed there
+                if (window.game.isInSafeZone && window.game.isInSafeZone(this.pos.x, this.pos.y)) {
                     return;
                 }
 
@@ -853,11 +932,15 @@
                 this.pos.add(new Vector2D(this.vel.x * deltaTime, this.vel.y * deltaTime));
 
                 // Clamp ship to world boundaries
-                const margin = this.size; // Ship's collision radius
+                const margin = this.hitRadius !== undefined ? this.hitRadius : this.size;
                 const oldX = this.pos.x;
                 const oldY = this.pos.y;
-                this.pos.x = Math.max(margin, Math.min(WORLD_WIDTH - margin, this.pos.x));
-                this.pos.y = Math.max(margin, Math.min(WORLD_HEIGHT - margin, this.pos.y));
+                const minX = margin;
+                const maxX = WORLD_WIDTH - margin;
+                const minY = PLAYFIELD_TOP + margin;
+                const maxY = PLAYFIELD_BOTTOM - margin;
+                this.pos.x = Math.max(minX, Math.min(maxX, this.pos.x));
+                this.pos.y = Math.max(minY, Math.min(maxY, this.pos.y));
 
                 // Stop velocity when hitting boundaries to prevent visual issues
                 if (oldX !== this.pos.x) {
@@ -1094,7 +1177,7 @@
                 switch (this.config.effect) {
                     case 'energy':
                         // Permanent max energy upgrade
-                        if (ship.energyLevel < 5) { // Max level is 5 (reach 2100 total)
+                        if (ship.energyLevel < UPGRADE_LIMITS.energyLevel) {
                             ship.energyLevel++;
                             ship.updateStatsFromLevels();
                             ship.energy = ship.maxEnergy; // Fill to new max
@@ -1102,12 +1185,14 @@
                         break;
                     case 'speed':
                         // Permanent speed upgrade
-                        ship.maxSpeedLevel++;
-                        ship.updateStatsFromLevels();
+                        if (ship.maxSpeedLevel < UPGRADE_LIMITS.maxSpeedLevel) {
+                            ship.maxSpeedLevel++;
+                            ship.updateStatsFromLevels();
+                        }
                         break;
                     case 'weapons':
                         // Permanent weapon upgrade (6-level progression up to Green+)
-                        if (ship.weaponLevel < 5) {
+                        if (ship.weaponLevel < UPGRADE_LIMITS.weaponLevel) {
                             ship.weaponLevel++;
                             ship.updateStatsFromLevels();
                         }
@@ -1117,21 +1202,27 @@
                         break;
                     case 'recharge':
                         // Permanent recharge upgrade
-                        ship.rechargeLevel++;
-                        ship.updateStatsFromLevels();
+                        if (ship.rechargeLevel < UPGRADE_LIMITS.rechargeLevel) {
+                            ship.rechargeLevel++;
+                            ship.updateStatsFromLevels();
+                        }
                         break;
                     case 'thrust':
                         // Permanent thrust upgrade
-                        ship.thrustLevel++;
-                        ship.updateStatsFromLevels();
+                        if (ship.thrustLevel < UPGRADE_LIMITS.thrustLevel) {
+                            ship.thrustLevel++;
+                            ship.updateStatsFromLevels();
+                        }
                         break;
                     case 'wall':
                         // Add wall to inventory
-                        ship.wallCount++;
+                        if (ship.wallCount < UPGRADE_LIMITS.wallCount) {
+                            ship.wallCount++;
+                        }
                         break;
                     case 'rotation':
                         // Permanent rotation upgrade (max level 3 for 100% improvement)
-                        if (ship.rotationLevel < 3) {
+                        if (ship.rotationLevel < UPGRADE_LIMITS.rotationLevel) {
                             ship.rotationLevel++;
                             ship.updateStatsFromLevels();
                         }
@@ -1197,12 +1288,12 @@
                     shouldBounce = true;
                 }
 
-                if (this.pos.y < 0) {
-                    this.pos.y = 0;
+                if (this.pos.y < PLAYFIELD_TOP) {
+                    this.pos.y = PLAYFIELD_TOP;
                     this.vel.y = Math.abs(this.vel.y);
                     shouldBounce = true;
-                } else if (this.pos.y > WORLD_HEIGHT) {
-                    this.pos.y = WORLD_HEIGHT;
+                } else if (this.pos.y > PLAYFIELD_BOTTOM) {
+                    this.pos.y = PLAYFIELD_BOTTOM;
                     this.vel.y = -Math.abs(this.vel.y);
                     shouldBounce = true;
                 }
@@ -1383,25 +1474,25 @@
 
                     // Check for world edge collisions
                     let shouldBounce = false;
-                if (this.pos.x < 0) {
-                    this.pos.x = 0;
-                    this.vel.x = Math.abs(this.vel.x);
-                    shouldBounce = true;
-                } else if (this.pos.x > WORLD_WIDTH) {
-                    this.pos.x = WORLD_WIDTH;
-                    this.vel.x = -Math.abs(this.vel.x);
-                    shouldBounce = true;
-                }
+                    if (this.pos.x < 0) {
+                        this.pos.x = 0;
+                        this.vel.x = Math.abs(this.vel.x);
+                        shouldBounce = true;
+                    } else if (this.pos.x > WORLD_WIDTH) {
+                        this.pos.x = WORLD_WIDTH;
+                        this.vel.x = -Math.abs(this.vel.x);
+                        shouldBounce = true;
+                    }
 
-                if (this.pos.y < 0) {
-                    this.pos.y = 0;
-                    this.vel.y = Math.abs(this.vel.y);
-                    shouldBounce = true;
-                } else if (this.pos.y > WORLD_HEIGHT) {
-                    this.pos.y = WORLD_HEIGHT;
-                    this.vel.y = -Math.abs(this.vel.y);
-                    shouldBounce = true;
-                }
+                    if (this.pos.y < PLAYFIELD_TOP) {
+                        this.pos.y = PLAYFIELD_TOP;
+                        this.vel.y = Math.abs(this.vel.y);
+                        shouldBounce = true;
+                    } else if (this.pos.y > PLAYFIELD_BOTTOM) {
+                        this.pos.y = PLAYFIELD_BOTTOM;
+                        this.vel.y = -Math.abs(this.vel.y);
+                        shouldBounce = true;
+                    }
 
                     if (shouldBounce) {
                         if (this.bounceCount < this.maxBounces) {
@@ -2158,10 +2249,14 @@
                 }
 
                 if (Number.isFinite(data.x)) {
-                    player.pos.x = data.x;
+                    const marginX = player.hitRadius !== undefined ? player.hitRadius : (player.size || 0);
+                    player.pos.x = Math.max(marginX, Math.min(WORLD_WIDTH - marginX, data.x));
                 }
                 if (Number.isFinite(data.y)) {
-                    player.pos.y = data.y;
+                    const margin = player.hitRadius !== undefined ? player.hitRadius : (player.size || 0);
+                    const minY = PLAYFIELD_TOP + margin;
+                    const maxY = PLAYFIELD_BOTTOM - margin;
+                    player.pos.y = Math.max(minY, Math.min(maxY, data.y));
                 }
                 if (Number.isFinite(data.rotation)) {
                     player.angle = data.rotation;
@@ -2791,11 +2886,16 @@
 
             clampPositionToWorld(x, y, margin = 50) {
                 const viewport = this.viewport || null;
-                const width = viewport && Number.isFinite(viewport.worldWidth) ? viewport.worldWidth : 8000;
-                const height = viewport && Number.isFinite(viewport.worldHeight) ? viewport.worldHeight : 5200;
+                const width = viewport && Number.isFinite(viewport.worldWidth) ? viewport.worldWidth : WORLD_WIDTH;
+                const height = viewport && Number.isFinite(viewport.worldHeight) ? viewport.worldHeight : WORLD_HEIGHT;
 
-                const clampedX = Math.max(margin, Math.min(width - margin, x));
-                const clampedY = Math.max(margin, Math.min(height - margin, y));
+                const minX = margin;
+                const maxX = width - margin;
+                const minY = PLAYFIELD_TOP + margin;
+                const maxY = PLAYFIELD_BOTTOM - margin;
+
+                const clampedX = Math.max(minX, Math.min(maxX, x));
+                const clampedY = Math.max(minY, Math.min(maxY, y));
 
                 return { x: clampedX, y: clampedY };
             }
@@ -2952,14 +3052,14 @@
                     }
                 }
                 document.getElementById('powerUps').textContent = this.powerUpsCollected;
-                document.getElementById('wallCount').textContent = ship.wallCount;
+                document.getElementById('wallCount').textContent = formatLevelDisplay(ship.wallCount, UPGRADE_LIMITS.wallCount);
                 document.getElementById('deaths').textContent = ship.deaths;
 
                 // Upgrade levels and their effects
                 const shipName = this.shipTypes[ship.shipType]?.name || 'Unknown';
                 document.getElementById('shipType').textContent = shipName;
-                document.getElementById('energyLevel').textContent = ship.energyLevel;
-                document.getElementById('speedLevel').textContent = ship.maxSpeedLevel;
+                document.getElementById('energyLevel').textContent = formatLevelDisplay(ship.energyLevel, UPGRADE_LIMITS.energyLevel);
+                document.getElementById('speedLevel').textContent = formatLevelDisplay(ship.maxSpeedLevel, UPGRADE_LIMITS.maxSpeedLevel);
                 document.getElementById('maxSpeed').textContent = Math.floor(ship.maxSpeed);
                 document.getElementById('bulletType').textContent = ship.bulletType.charAt(0).toUpperCase() + ship.bulletType.slice(1);
 
@@ -2976,13 +3076,16 @@
                 const currentDamage = this.getBulletDamage(Math.min(Math.max(ship.weaponLevel, 0), 5));
                 document.getElementById('bulletDamage').textContent = currentDamage;
                 document.getElementById('bombType').textContent = ship.bulletType.charAt(0).toUpperCase() + ship.bulletType.slice(1);
-                document.getElementById('rechargeLevel').textContent = ship.rechargeLevel;
-                document.getElementById('rechargeRate').textContent = Math.floor((ship.energyRecharge - 50) / 50 * 100); // Show actual percentage increase
-                document.getElementById('thrustLevel').textContent = ship.thrustLevel;
-                document.getElementById('thrustBonus').textContent = Math.floor(ship.thrustLevel * 2);
-                document.getElementById('rotationLevel').textContent = ship.rotationLevel;
-                const rotationBonus = Math.floor(ship.rotationLevel * 33);
-                const rotationText = ship.rotationLevel >= 3 ? `${rotationBonus}% (MAX)` : `${rotationBonus}%`;
+                document.getElementById('rechargeLevel').textContent = formatLevelDisplay(ship.rechargeLevel, UPGRADE_LIMITS.rechargeLevel);
+                const rechargeMultiplier = ship.baseEnergyRecharge > 0 ? (ship.energyRecharge / ship.baseEnergyRecharge) : 1;
+                const rechargeBonus = (rechargeMultiplier - 1) * 100;
+                document.getElementById('rechargeRate').textContent = formatPercentDisplay(rechargeBonus, ship.rechargeLevel >= UPGRADE_LIMITS.rechargeLevel);
+                document.getElementById('thrustLevel').textContent = formatLevelDisplay(ship.thrustLevel, UPGRADE_LIMITS.thrustLevel);
+                const thrustBonus = ship.thrustLevel * 2;
+                document.getElementById('thrustBonus').textContent = formatPercentDisplay(thrustBonus, ship.thrustLevel >= UPGRADE_LIMITS.thrustLevel);
+                document.getElementById('rotationLevel').textContent = formatLevelDisplay(ship.rotationLevel, UPGRADE_LIMITS.rotationLevel);
+                const rotationBonus = ship.rotationLevel * 33;
+                const rotationText = formatPercentDisplay(rotationBonus, ship.rotationLevel >= UPGRADE_LIMITS.rotationLevel);
                 document.getElementById('rotationBonus').textContent = rotationText;
 
                 // Energy bar
@@ -3191,8 +3294,8 @@
                 }
 
                 // Top edge
-                if (ship.pos.y < margin) {
-                    const screenPos = this.viewport.worldToScreen(0, 0);
+                if (ship.pos.y < PLAYFIELD_TOP + margin) {
+                    const screenPos = this.viewport.worldToScreen(0, PLAYFIELD_TOP);
                     this.ctx.beginPath();
                     this.ctx.moveTo(0, screenPos.y);
                     this.ctx.lineTo(this.canvas.width, screenPos.y);
@@ -3200,8 +3303,8 @@
                 }
 
                 // Bottom edge
-                if (ship.pos.y > this.viewport.worldHeight - margin) {
-                    const screenPos = this.viewport.worldToScreen(0, this.viewport.worldHeight);
+                if (ship.pos.y > PLAYFIELD_BOTTOM - margin) {
+                    const screenPos = this.viewport.worldToScreen(0, PLAYFIELD_BOTTOM);
                     this.ctx.beginPath();
                     this.ctx.moveTo(0, screenPos.y);
                     this.ctx.lineTo(this.canvas.width, screenPos.y);
@@ -3420,30 +3523,70 @@
                     wallCount: { slider: 'wallCountSlider', value: 'wallCountValue', property: 'wallCount' }
                 };
 
+                this.upgradeSliders = sliders;
+
                 Object.entries(sliders).forEach(([key, config]) => {
                     const slider = document.getElementById(config.slider);
                     const valueDisplay = document.getElementById(config.value);
 
                     if (slider && valueDisplay) {
-                        // Initialize slider with current ship values
-                        slider.value = this.playerShip[config.property] || 0;
-                        valueDisplay.textContent = slider.value;
+                        const limit = UPGRADE_LIMITS[config.property];
+                        if (limit !== undefined) {
+                            slider.max = limit;
+                        }
+
+                        const maxAllowed = limit !== undefined ? limit : Number.MAX_SAFE_INTEGER;
+                        const initialValue = clampValue(this.playerShip[config.property] || 0, 0, maxAllowed);
+                        slider.value = initialValue;
+                        valueDisplay.textContent = limit !== undefined
+                            ? formatLevelDisplay(initialValue, limit)
+                            : initialValue;
 
                         slider.addEventListener('input', (e) => {
-                            const value = parseInt(e.target.value);
-                            valueDisplay.textContent = value;
+                            const rawValue = Number(e.target.value);
+                            const clampedValue = clampValue(rawValue, 0, maxAllowed);
+                            slider.value = clampedValue;
+                            valueDisplay.textContent = limit !== undefined
+                                ? formatLevelDisplay(clampedValue, limit)
+                                : clampedValue;
 
-                            // Update the ship upgrade level directly
-                            this.playerShip[config.property] = value;
-
-                            // Force recalculation of ship stats
+                            this.playerShip[config.property] = clampedValue;
                             this.playerShip.updateStatsFromLevels();
-
-                            // Update HUD to reflect changes
                             this.updateHUD();
                         });
                     }
                 });
+
+                const countInput = document.getElementById('spawnPowerUpCount');
+                const countValue = document.getElementById('spawnPowerUpCountValue');
+                if (countInput && countValue) {
+                    countInput.addEventListener('input', (e) => {
+                        const value = clampValue(Number(e.target.value), 1, 250);
+                        countInput.value = value;
+                        countValue.textContent = value;
+                    });
+                }
+
+                const spawnBtn = document.getElementById('spawnPowerUpsBtn');
+                if (spawnBtn) {
+                    spawnBtn.addEventListener('click', () => {
+                        const checkedBoxes = Array.from(document.querySelectorAll('.powerup-checkbox:checked'));
+                        if (!checkedBoxes.length) {
+                            console.warn('No power-up types selected');
+                            return;
+                        }
+                        const count = countInput ? clampValue(Number(countInput.value), 1, 250) : 1;
+                        const types = checkedBoxes.map(box => box.value);
+                        this.spawnDebugPowerUps(types, count);
+                    });
+                }
+
+                const clearBtn = document.getElementById('clearPowerUpsBtn');
+                if (clearBtn) {
+                    clearBtn.addEventListener('click', () => {
+                        this.clearNearbyPowerUps();
+                    });
+                }
 
                 // Special handler for fire rate (modifies ship config, not ship property)
                 const fireRateSlider = document.getElementById('fireRateSlider');
@@ -3478,23 +3621,19 @@
 
             refreshConfigPanel() {
                 // Update all sliders to reflect current ship upgrade levels
-                const updates = {
-                    'energyLevelSlider': this.playerShip.energyLevel,
-                    'speedLevelSlider': this.playerShip.maxSpeedLevel,
-                    'weaponLevelSlider': this.playerShip.weaponLevel,
-                    'rechargeLevelSlider': this.playerShip.rechargeLevel,
-                    'thrustLevelSlider': this.playerShip.thrustLevel,
-                    'rotationLevelSlider': this.playerShip.rotationLevel,
-                    'wallCountSlider': this.playerShip.wallCount
-                };
-
-                Object.entries(updates).forEach(([sliderId, value]) => {
-                    const slider = document.getElementById(sliderId);
-                    const valueDisplay = document.getElementById(sliderId.replace('Slider', 'Value'));
-                    if (slider && valueDisplay) {
-                        slider.value = value || 0;
-                        valueDisplay.textContent = value || 0;
+                Object.values(this.upgradeSliders || {}).forEach((config) => {
+                    const slider = document.getElementById(config.slider);
+                    const valueDisplay = document.getElementById(config.value);
+                    if (!slider || !valueDisplay) {
+                        return;
                     }
+                    const limit = UPGRADE_LIMITS[config.property];
+                    const maxAllowed = limit !== undefined ? limit : Number.MAX_SAFE_INTEGER;
+                    const currentValue = clampValue(this.playerShip[config.property] || 0, 0, maxAllowed);
+                    slider.value = currentValue;
+                    valueDisplay.textContent = limit !== undefined
+                        ? formatLevelDisplay(currentValue, limit)
+                        : currentValue;
                 });
 
                 // Update fire rate slider
@@ -3506,6 +3645,44 @@
                     fireRateSlider.value = currentRate;
                     fireRateValue.textContent = currentRate.toFixed(1);
                 }
+            }
+
+            spawnDebugPowerUps(types, count = 1) {
+                if (!Array.isArray(types) || !types.length) {
+                    return;
+                }
+                const clampedCount = clampValue(count, 1, 250);
+                const angleStep = (Math.PI * 2) / Math.max(clampedCount, 1);
+                const radius = 40;
+
+                for (let i = 0; i < clampedCount; i++) {
+                    const type = types[i % types.length];
+                    const angle = angleStep * i;
+                    const offsetX = Math.cos(angle) * radius;
+                    const offsetY = Math.sin(angle) * radius;
+                    const preferredX = this.playerShip.pos.x + offsetX;
+                    const preferredY = this.playerShip.pos.y + offsetY;
+                    const position = this.findValidPowerUpPosition(preferredX, preferredY);
+
+                    const powerUp = new PowerUp(position.x, position.y, type);
+                    powerUp.debugSpawned = true;
+                    this.powerUps.push(powerUp);
+                }
+            }
+
+            clearNearbyPowerUps(radius = 200) {
+                const shipX = this.playerShip.pos.x;
+                const shipY = this.playerShip.pos.y;
+                const radiusSq = radius * radius;
+                this.powerUps = this.powerUps.filter(powerUp => {
+                    if (!powerUp || !powerUp.pos) {
+                        return false;
+                    }
+                    const dx = powerUp.pos.x - shipX;
+                    const dy = powerUp.pos.y - shipY;
+                    const distanceSq = dx * dx + dy * dy;
+                    return distanceSq > radiusSq;
+                });
             }
 
             gameLoop(currentTime = 0) {
