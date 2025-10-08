@@ -214,7 +214,9 @@
             </div>
         </div>
 
-        <div class="radar" id="radar"></div>
+        <div class="radar" id="radar">
+            <canvas id="radarCanvas" width="146" height="146" style="border-radius: 50%; display: block;"></canvas>
+        </div>
 
         <!-- Ship Configuration Panel (F12 to toggle) -->
         <div class="config-panel" id="configPanel">
@@ -1750,6 +1752,137 @@
             }
         }
 
+        // Minimap class for real-time updates
+        class Minimap {
+            constructor(canvasId, worldWidth, worldHeight) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.worldWidth = worldWidth;
+                this.worldHeight = worldHeight;
+                this.radarRadius = this.canvas.width / 2;
+
+                // Turn off smoothing for crisp display
+                this.ctx.imageSmoothingEnabled = false;
+                this.ctx.mozImageSmoothingEnabled = false;
+                this.ctx.webkitImageSmoothingEnabled = false;
+                this.ctx.msImageSmoothingEnabled = false;
+
+                this.centerX = this.canvas.width / 2;
+                this.centerY = this.canvas.height / 2;
+            }
+
+            // Convert world coordinates to minimap coordinates
+            worldToMinimap(worldX, worldY) {
+                const scaleX = (this.canvas.width - 4) / this.worldWidth;  // -4 for border padding
+                const scaleY = (this.canvas.height - 4) / this.worldHeight;
+                const scale = Math.min(scaleX, scaleY);
+
+                return {
+                    x: (worldX / this.worldWidth) * (this.canvas.width - 4) + 2,
+                    y: (worldY / this.worldHeight) * (this.canvas.height - 4) + 2
+                };
+            }
+
+            clear() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                // Draw background circle
+                this.ctx.fillStyle = 'rgba(0, 50, 50, 0.3)';
+                this.ctx.beginPath();
+                this.ctx.arc(this.centerX, this.centerY, this.radarRadius - 2, 0, Math.PI * 2);
+                this.ctx.fill();
+            }
+
+            drawPlayer(worldX, worldY, color = '#00ff00', isLocal = false) {
+                const pos = this.worldToMinimap(worldX, worldY);
+
+                this.ctx.fillStyle = color;
+                this.ctx.beginPath();
+                this.ctx.arc(pos.x, pos.y, isLocal ? 3 : 2, 0, Math.PI * 2);
+                this.ctx.fill();
+
+                if (isLocal) {
+                    // Add a ring around local player
+                    this.ctx.strokeStyle = color;
+                    this.ctx.lineWidth = 1;
+                    this.ctx.beginPath();
+                    this.ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
+                    this.ctx.stroke();
+                }
+            }
+
+            drawSafeZone(worldX, worldY, radius) {
+                const center = this.worldToMinimap(worldX, worldY);
+                const mapRadius = (radius / this.worldWidth) * (this.canvas.width - 4);
+
+                this.ctx.strokeStyle = '#00ffff';
+                this.ctx.lineWidth = 1;
+                this.ctx.setLineDash([2, 2]);
+                this.ctx.beginPath();
+                this.ctx.arc(center.x, center.y, mapRadius, 0, Math.PI * 2);
+                this.ctx.stroke();
+                this.ctx.setLineDash([]); // Reset dash
+            }
+
+            drawBomb(worldX, worldY, isMine = false) {
+                const pos = this.worldToMinimap(worldX, worldY);
+
+                this.ctx.fillStyle = isMine ? '#ff0000' : '#ff8800';
+                this.ctx.beginPath();
+                this.ctx.arc(pos.x, pos.y, isMine ? 2 : 1.5, 0, Math.PI * 2);
+                this.ctx.fill();
+            }
+
+            drawWall(bricks) {
+                this.ctx.fillStyle = '#888888';
+                bricks.forEach(brick => {
+                    const pos = this.worldToMinimap(brick.x, brick.y);
+                    this.ctx.fillRect(pos.x - 1, pos.y - 1, 2, 2);
+                });
+            }
+
+            update(game) {
+                this.clear();
+
+                // Draw safe zone
+                if (game.safeZone) {
+                    this.drawSafeZone(game.safeZone.x, game.safeZone.y, game.safeZone.radius);
+                }
+
+                // Draw walls
+                if (game.walls) {
+                    game.walls.forEach(wall => {
+                        if (wall && wall.bricks) {
+                            this.drawWall(wall.bricks);
+                        }
+                    });
+                }
+
+                // Draw bombs and mines
+                if (game.bombs) {
+                    game.bombs.forEach(bomb => {
+                        if (bomb && bomb.pos) {
+                            this.drawBomb(bomb.pos.x, bomb.pos.y, bomb.isMine || false);
+                        }
+                    });
+                }
+
+                // Draw local player
+                if (game.playerShip && game.playerShip.pos) {
+                    this.drawPlayer(game.playerShip.pos.x, game.playerShip.pos.y, '#00ff00', true);
+                }
+
+                // Draw remote players
+                if (game.otherPlayers) {
+                    game.otherPlayers.forEach(player => {
+                        if (player && player.pos) {
+                            this.drawPlayer(player.pos.x, player.pos.y, '#ffff00', false);
+                        }
+                    });
+                }
+            }
+        }
+
         // Main game class
         class SubspaceGame {
             constructor() {
@@ -1826,6 +1959,9 @@
 
                 // Viewport for camera system
                 this.viewport = new Viewport(this.canvas.width, this.canvas.height);
+
+                // Initialize minimap
+                this.minimap = new Minimap('radarCanvas', this.viewport.worldWidth, this.viewport.worldHeight);
 
                 // Create player ship in world coordinates
                 this.playerShip = new Ship(this.viewport.worldWidth / 2, this.viewport.worldHeight / 2, true);
@@ -3872,6 +4008,11 @@
 
                     this.updateHUD();
                     this.draw();
+
+                    // Update minimap
+                    if (this.minimap) {
+                        this.minimap.update(this);
+                    }
                 }
 
                 requestAnimationFrame((time) => this.gameLoop(time));
