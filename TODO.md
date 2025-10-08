@@ -11,7 +11,11 @@
 - [ ] Fine-tune bullet energy cost so even maxed ships expend meaningful energy per shot.
 - [ ] Add mines.
 - [ ] Fix walls.
+- [x] Make wall drops 90 degrees.
 - [x] Add a warp to safe zone option (F7) requiring full energy.
 - [ ] Anti-warp.
 - [ ] Investigate multiplayer bounty not increasing.
 - [ ] Adjust braking response.
+- [ ] Investigate afterburner energy consumption (Shift) and recharge interaction.
+- [ ] Fix max level caps for all ship buffs/power-ups.
+- [ ] Lock down safe zone (no shooting, bombs, or drops inside).

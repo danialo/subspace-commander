@@ -531,9 +531,22 @@
                 this.shieldActive = false;
                 this.shieldTimer = 0;
 
-                // Respawn in center of world
-                this.pos.x = 4000;
-                this.pos.y = 3000;
+                // Respawn in safe zone when available
+                const game = (typeof window !== 'undefined' && window.game) ? window.game : null;
+                if (game && game.safeZone) {
+                    const safeZone = game.safeZone;
+                    const targetX = Number.isFinite(safeZone.x) ? safeZone.x : 4000;
+                    const targetY = Number.isFinite(safeZone.y) ? safeZone.y : 2600;
+                    const clamped = typeof game.findValidPowerUpPosition === 'function'
+                        ? game.clampPositionToWorld(targetX, targetY, 40)
+                        : { x: targetX, y: targetY };
+                    this.pos.x = clamped.x;
+                    this.pos.y = clamped.y;
+                } else {
+                    // Fallback to approximate world center
+                    this.pos.x = 4000;
+                    this.pos.y = 2600;
+                }
                 this.angle = 0;
                 this.rawAngle = 0;
 
@@ -544,7 +557,7 @@
                 this.alive = true;
             }
 
-            processInput(input, deltaTime) {
+            processInput(input, deltaTime, context = {}) {
                 // Get ship-specific configuration
                 const config = window.shipConfig.getConfig(this.shipType);
 
@@ -590,7 +603,9 @@
 
                 // Brake
                 if (input.brake) {
-                    this.vel.scale(0.95);
+                    const brakeFactor = typeof context.brakeFactor === 'number' ? context.brakeFactor : 0.95;
+                    const clampedFactor = Math.max(0, Math.min(1, brakeFactor));
+                    this.vel.scale(clampedFactor);
                 }
 
                 // Firing bullets
@@ -1467,19 +1482,18 @@
                 this.bricks = [];
                 this.brickSize = 20;
                 this.brickCount = 6;
-                this.lifetime = 30; // Wall lasts 30 seconds
+                this.lifetime = 300; // Wall lasts roughly five minutes
                 this.maxLifetime = this.lifetime;
 
-                // Create 6 bricks in a straight line behind the ship
-                for (let i = 0; i < this.brickCount; i++) {
-                    // Straight line behind ship direction
-                    const backwardX = Math.sin(angle + Math.PI);
-                    const backwardY = -Math.cos(angle + Math.PI);
+                const wallAngle = Number.isFinite(angle) ? angle : 0;
+                const lateralX = Math.cos(wallAngle);
+                const lateralY = Math.sin(wallAngle);
 
+                for (let i = 0; i < this.brickCount; i++) {
+                    const offset = (i + 1) * this.brickSize;
                     this.bricks.push({
-                        x: x + (backwardX * (i + 1) * this.brickSize),
-                        y: y + (backwardY * (i + 1) * this.brickSize),
-                        destroyed: false
+                        x: x + lateralX * offset,
+                        y: y + lateralY * offset
                     });
                 }
             }
@@ -1489,39 +1503,29 @@
             }
 
             expired() {
-                return this.lifetime <= 0 || this.bricks.every(brick => brick.destroyed);
+                return this.lifetime <= 0;
             }
 
             checkBulletCollision(bullet) {
                 for (let brick of this.bricks) {
-                    if (!brick.destroyed) {
-                        const dx = bullet.pos.x - brick.x;
-                        const dy = bullet.pos.y - brick.y;
-                        const distance = Math.sqrt(dx * dx + dy * dy);
+                    const dx = bullet.pos.x - brick.x;
+                    const dy = bullet.pos.y - brick.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
 
-                        if (distance < this.brickSize / 2 + bullet.size / 2) {
-                            if (bullet.canBounce && bullet.bounceCount < bullet.maxBounces && !bullet.hasHitWall) {
-                                // Bounce bullet off wall
-                                const angle = Math.atan2(dy, dx);
-                                const speed = Math.sqrt(bullet.vel.x * bullet.vel.x + bullet.vel.y * bullet.vel.y);
-                                bullet.vel.x = Math.cos(angle) * speed;
-                                bullet.vel.y = Math.sin(angle) * speed;
+                    if (distance < this.brickSize / 2 + bullet.size / 2) {
+                        const angle = Math.atan2(dy, dx);
+                        const speed = Math.sqrt(bullet.vel.x * bullet.vel.x + bullet.vel.y * bullet.vel.y);
+                        bullet.vel.x = Math.cos(angle) * speed;
+                        bullet.vel.y = Math.sin(angle) * speed;
 
-                                // Move bullet away from wall to prevent stuck
-                                bullet.pos.x = brick.x + Math.cos(angle) * (this.brickSize / 2 + bullet.size / 2 + 5);
-                                bullet.pos.y = brick.y + Math.sin(angle) * (this.brickSize / 2 + bullet.size / 2 + 5);
+                        bullet.pos.x = brick.x + Math.cos(angle) * (this.brickSize / 2 + bullet.size / 2 + 5);
+                        bullet.pos.y = brick.y + Math.sin(angle) * (this.brickSize / 2 + bullet.size / 2 + 5);
 
-                                bullet.bounceCount++;
-                                bullet.hasHitWall = true;
-                                bullet.vel.scale(0.8); // Reduce velocity on wall bounce
+                        bullet.bounceCount = (bullet.bounceCount || 0) + 1;
+                        bullet.hasHitWall = true;
+                        bullet.vel.scale(0.8);
 
-                                return false; // Bullet bounced, not destroyed
-                            } else {
-                                // Bullet destroyed by wall
-                                brick.destroyed = true;
-                                return true; // Bullet destroyed
-                            }
-                        }
+                        return false;
                     }
                 }
                 return false;
@@ -1529,32 +1533,21 @@
 
             checkBombCollision(bomb) {
                 for (let brick of this.bricks) {
-                    if (!brick.destroyed) {
-                        const dx = bomb.pos.x - brick.x;
-                        const dy = bomb.pos.y - brick.y;
-                        const distance = Math.sqrt(dx * dx + dy * dy);
+                    const dx = bomb.pos.x - brick.x;
+                    const dy = bomb.pos.y - brick.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
 
-                        if (distance < this.brickSize / 2 + bomb.size) {
-                            if (bomb.wallBounceCount < bomb.maxWallBounces) {
-                                // Bounce bomb off wall
-                                const angle = Math.atan2(dy, dx);
-                                const speed = Math.sqrt(bomb.vel.x * bomb.vel.x + bomb.vel.y * bomb.vel.y);
-                                bomb.vel.x = Math.cos(angle) * speed;
-                                bomb.vel.y = Math.sin(angle) * speed;
+                    if (distance < this.brickSize / 2 + bomb.size) {
+                        const angle = Math.atan2(dy, dx);
+                        const speed = Math.sqrt(bomb.vel.x * bomb.vel.x + bomb.vel.y * bomb.vel.y);
+                        bomb.vel.x = Math.cos(angle) * speed;
+                        bomb.vel.y = Math.sin(angle) * speed;
 
-                                // Move bomb away from wall to prevent stuck
-                                bomb.pos.x = brick.x + Math.cos(angle) * (this.brickSize / 2 + bomb.size + 5);
-                                bomb.pos.y = brick.y + Math.sin(angle) * (this.brickSize / 2 + bomb.size + 5);
+                        bomb.pos.x = brick.x + Math.cos(angle) * (this.brickSize / 2 + bomb.size + 5);
+                        bomb.pos.y = brick.y + Math.sin(angle) * (this.brickSize / 2 + bomb.size + 5);
 
-                                bomb.wallBounceCount++; // Increment wall bounce counter
-
-                                return true; // Bomb bounced
-                            } else {
-                                // Bomb has already bounced once off walls - explode it
-                                bomb.explode();
-                                return true; // Bomb exploded
-                            }
-                        }
+                        bomb.wallBounceCount = (bomb.wallBounceCount || 0) + 1;
+                        return true;
                     }
                 }
                 return false;
@@ -1562,31 +1555,26 @@
 
             checkShipCollision(ship) {
                 for (let brick of this.bricks) {
-                    if (!brick.destroyed) {
-                        const dx = ship.pos.x - brick.x;
-                        const dy = ship.pos.y - brick.y;
-                        const distance = Math.sqrt(dx * dx + dy * dy);
+                    const dx = ship.pos.x - brick.x;
+                    const dy = ship.pos.y - brick.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
 
-                        const shipRadius = ship.hitRadius !== undefined ? ship.hitRadius : ship.size;
-                        if (distance < this.brickSize / 2 + shipRadius) {
-                            // Block ship movement - push ship away from wall
-                            const angle = Math.atan2(dy, dx);
-                            const pushDistance = this.brickSize / 2 + shipRadius + 2;
+                    const shipRadius = ship.hitRadius !== undefined ? ship.hitRadius : ship.size;
+                    if (distance < this.brickSize / 2 + shipRadius) {
+                        const angle = Math.atan2(dy, dx);
+                        const pushDistance = this.brickSize / 2 + shipRadius + 2;
 
-                            ship.pos.x = brick.x + Math.cos(angle) * pushDistance;
-                            ship.pos.y = brick.y + Math.sin(angle) * pushDistance;
+                        ship.pos.x = brick.x + Math.cos(angle) * pushDistance;
+                        ship.pos.y = brick.y + Math.sin(angle) * pushDistance;
 
-                            // Also dampen velocity in collision direction
-                            const velAngle = Math.atan2(ship.vel.y, ship.vel.x);
-                            const angleDiff = Math.abs(velAngle - (angle + Math.PI));
+                        const velAngle = Math.atan2(ship.vel.y, ship.vel.x);
+                        const angleDiff = Math.abs(velAngle - (angle + Math.PI));
 
-                            if (angleDiff < Math.PI / 2) {
-                                // Moving toward wall, stop that velocity component
-                                ship.vel.scale(0.3);
-                            }
-
-                            return true; // Ship blocked
+                        if (angleDiff < Math.PI / 2) {
+                            ship.vel.scale(0.3);
                         }
+
+                        return true;
                     }
                 }
                 return false;
@@ -1743,6 +1731,7 @@
                 this.otherPlayers = new Map();
                 this.ws = null;
                 this.lastDamageSource = null;
+                this.shipSelectionEnabled = true;
 
                 // Viewport for camera system
                 this.viewport = new Viewport(this.canvas.width, this.canvas.height);
@@ -1874,6 +1863,9 @@
                 switch (data.type) {
                     case 'init':
                         this.playerId = data.playerId;
+                        if (typeof data.shipSelectionEnabled === 'boolean') {
+                            this.shipSelectionEnabled = data.shipSelectionEnabled;
+                        }
                         this.playerBounties.delete('local');
                         this.setPlayerBounty(this.playerId, this.powerUpsCollected);
                         if (data.world) {
@@ -2138,6 +2130,8 @@
                     return;
                 }
 
+                const shipType = Math.min(8, Math.max(1, Math.floor(this.playerShip.shipType || 1)));
+
                 this.sendMultiplayerMessage({
                     type: 'playerUpdate',
                     x: this.playerShip.pos.x,
@@ -2250,6 +2244,9 @@
 
                 const target = this.otherPlayers.get(playerId);
                 if (target && this.isInSafeZone(target.pos.x, target.pos.y)) {
+                    return;
+                }
+                if (this.safeZone && this.isInSafeZone(this.playerShip.pos.x, this.playerShip.pos.y)) {
                     return;
                 }
 
@@ -2525,6 +2522,15 @@
             }
 
             damagePlayersInRadius(x, y, radius, baseDamage, ownerId = null, bombType = null, isMine = false) {
+                if (this.safeZone && this.isInSafeZone(x, y)) {
+                    return;
+                }
+
+                const ownerIsLocalPlayer = ownerId && (ownerId === this.playerId || ownerId === 'local');
+                if (ownerIsLocalPlayer && this.safeZone && this.isInSafeZone(this.playerShip.pos.x, this.playerShip.pos.y)) {
+                    return;
+                }
+
                 // Damage local player
                 const localDx = this.playerShip.pos.x - x;
                 const localDy = this.playerShip.pos.y - y;
@@ -2721,8 +2727,9 @@
                     const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
                     const x = Math.random() * (this.viewport.worldWidth - 200) + 100;
                     const y = Math.random() * (this.viewport.worldHeight - 200) + 100;
+                    const position = this.findValidPowerUpPosition(x, y);
 
-                    this.powerUps.push(new PowerUp(x, y, type));
+                    this.powerUps.push(new PowerUp(position.x, position.y, type));
                 }
             }
 
@@ -2737,12 +2744,60 @@
                 const angle = Math.random() * Math.PI * 2;
                 const distance = minDistance + Math.random() * (maxDistance - minDistance);
 
-                const x = Math.max(50, Math.min(this.viewport.worldWidth - 50,
-                    this.playerShip.pos.x + Math.cos(angle) * distance));
-                const y = Math.max(50, Math.min(this.viewport.worldHeight - 50,
-                    this.playerShip.pos.y + Math.sin(angle) * distance));
+                const preferredX = this.playerShip.pos.x + Math.cos(angle) * distance;
+                const preferredY = this.playerShip.pos.y + Math.sin(angle) * distance;
+                const position = this.findValidPowerUpPosition(preferredX, preferredY);
 
-                this.powerUps.push(new PowerUp(x, y, type));
+                this.powerUps.push(new PowerUp(position.x, position.y, type));
+            }
+
+            findValidPowerUpPosition(preferredX, preferredY, attempts = 5) {
+                let x = preferredX;
+                let y = preferredY;
+                const margin = 60;
+
+                for (let i = 0; i < attempts; i++) {
+                    ({ x, y } = this.clampPositionToWorld(x, y, margin));
+
+                    if (!this.safeZone) {
+                        break;
+                    }
+
+                    const dx = x - this.safeZone.x;
+                    const dy = y - this.safeZone.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const minDistance = this.safeZone.radius + margin;
+
+                    if (!Number.isFinite(distance) || distance < 1) {
+                        const angle = Math.random() * Math.PI * 2;
+                        x = this.safeZone.x + Math.cos(angle) * minDistance;
+                        y = this.safeZone.y + Math.sin(angle) * minDistance;
+                        continue;
+                    }
+
+                    if (distance < minDistance) {
+                        const scale = minDistance / distance;
+                        x = this.safeZone.x + dx * scale;
+                        y = this.safeZone.y + dy * scale;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                ({ x, y } = this.clampPositionToWorld(x, y, margin));
+                return { x, y };
+            }
+
+            clampPositionToWorld(x, y, margin = 50) {
+                const viewport = this.viewport || null;
+                const width = viewport && Number.isFinite(viewport.worldWidth) ? viewport.worldWidth : 8000;
+                const height = viewport && Number.isFinite(viewport.worldHeight) ? viewport.worldHeight : 5200;
+
+                const clampedX = Math.max(margin, Math.min(width - margin, x));
+                const clampedY = Math.max(margin, Math.min(height - margin, y));
+
+                return { x: clampedX, y: clampedY };
             }
 
             setupEventListeners() {
@@ -3464,7 +3519,9 @@
 
                 if (this.running && deltaTime < 0.1) { // Cap deltaTime to prevent large jumps
                     // Update player ship
-                    this.playerShip.processInput(this.input, deltaTime);
+                    const inSafeZone = this.safeZone && this.isInSafeZone(this.playerShip.pos.x, this.playerShip.pos.y);
+                    const brakeFactor = inSafeZone ? 0.5 : 0.95;
+                    this.playerShip.processInput(this.input, deltaTime, { brakeFactor });
 
                     // Share player state when it changes or at steady intervals
                     if (this.isMultiplayer) {

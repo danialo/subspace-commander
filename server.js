@@ -19,7 +19,7 @@ app.use(express.static(__dirname));
 
 const wss = new WebSocket.Server({ server });
 const players = new Map();
-const SHIP_SELECTION_ENABLED = false;
+const SHIP_SELECTION_ENABLED = true;
 const DEFAULT_SHIP_TYPE = 1;
 const WORLD_WIDTH = 8000;
 const WORLD_HEIGHT = 5200;
@@ -30,6 +30,16 @@ const SAFE_ZONE = {
     radius: 250
 };
 const ENERGY_TOLERANCE = 1;
+const SAFE_ZONE_RADIUS_SQUARED = SAFE_ZONE.radius * SAFE_ZONE.radius;
+
+function isInSafeZone(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return false;
+    }
+    const dx = x - SAFE_ZONE.x;
+    const dy = y - SAFE_ZONE.y;
+    return (dx * dx + dy * dy) <= SAFE_ZONE_RADIUS_SQUARED;
+}
 
 wss.on('connection', function connection(ws, req) {
     const playerId = Math.random().toString(36).substr(2, 9);
@@ -65,7 +75,8 @@ wss.on('connection', function connection(ws, req) {
         playerId: playerId,
         players: existingPlayers,
         safeZone: SAFE_ZONE,
-        world: { width: WORLD_WIDTH, height: WORLD_HEIGHT }
+        world: { width: WORLD_WIDTH, height: WORLD_HEIGHT },
+        shipSelectionEnabled: SHIP_SELECTION_ENABLED
     }));
 
     // Notify other players about new player
@@ -95,15 +106,20 @@ wss.on('connection', function connection(ws, req) {
                 if (player) {
                     if (typeof message.x === 'number') player.x = message.x;
                     if (typeof message.y === 'number') player.y = message.y;
-<<<<<<< Updated upstream
-                    if (typeof message.shipType === 'number') player.shipType = message.shipType;
-=======
-                    if (typeof message.shipType === 'number') {
-                        player.shipType = SHIP_SELECTION_ENABLED ? message.shipType : DEFAULT_SHIP_TYPE;
-                        if (!SHIP_SELECTION_ENABLED) {
+                    if (SHIP_SELECTION_ENABLED) {
+                        const parsedShipType = Number(message.shipType);
+                        if (Number.isFinite(parsedShipType)) {
+                            const normalized = Math.min(8, Math.max(1, Math.floor(parsedShipType)));
+                            player.shipType = normalized;
+                            message.shipType = normalized;
+                        } else if (Number.isFinite(player.shipType)) {
+                            message.shipType = Math.min(8, Math.max(1, Math.floor(player.shipType)));
+                        } else {
+                            player.shipType = DEFAULT_SHIP_TYPE;
                             message.shipType = DEFAULT_SHIP_TYPE;
                         }
-                    } else if (!SHIP_SELECTION_ENABLED) {
+                    } else {
+                        player.shipType = DEFAULT_SHIP_TYPE;
                         message.shipType = DEFAULT_SHIP_TYPE;
                     }
                     if (Number.isFinite(Number(message.energy))) {
@@ -112,7 +128,6 @@ wss.on('connection', function connection(ws, req) {
                     if (Number.isFinite(Number(message.maxEnergy))) {
                         player.maxEnergy = Number(message.maxEnergy);
                     }
->>>>>>> Stashed changes
                 }
                 // Broadcast to all other players
                 const updateData = {
@@ -242,15 +257,45 @@ wss.on('connection', function connection(ws, req) {
             } else if (message.type === 'playerDamage') {
                 // Forward damage message to target player
                 const targetPlayer = players.get(message.targetId);
-                if (targetPlayer && targetPlayer.ws.readyState === WebSocket.OPEN) {
-                    targetPlayer.ws.send(JSON.stringify(message));
+                if (!targetPlayer || targetPlayer.ws.readyState !== WebSocket.OPEN) {
+                    return;
                 }
+
+                const targetX = Number(targetPlayer.x);
+                const targetY = Number(targetPlayer.y);
+                if (isInSafeZone(targetX, targetY)) {
+                    return;
+                }
+
+                const attacker = players.get(playerId);
+                const attackerX = attacker ? Number(attacker.x) : NaN;
+                const attackerY = attacker ? Number(attacker.y) : NaN;
+                if (isInSafeZone(attackerX, attackerY)) {
+                    return;
+                }
+
+                targetPlayer.ws.send(JSON.stringify(message));
             } else if (message.type === 'bombDamage') {
                 // Forward bomb damage message to target player
                 const targetPlayer = players.get(message.targetId);
-                if (targetPlayer && targetPlayer.ws.readyState === WebSocket.OPEN) {
-                    targetPlayer.ws.send(JSON.stringify(message));
+                if (!targetPlayer || targetPlayer.ws.readyState !== WebSocket.OPEN) {
+                    return;
                 }
+
+                const targetX = Number(targetPlayer.x);
+                const targetY = Number(targetPlayer.y);
+                if (isInSafeZone(targetX, targetY)) {
+                    return;
+                }
+
+                const attacker = players.get(playerId);
+                const attackerX = attacker ? Number(attacker.x) : NaN;
+                const attackerY = attacker ? Number(attacker.y) : NaN;
+                if (isInSafeZone(attackerX, attackerY)) {
+                    return;
+                }
+
+                targetPlayer.ws.send(JSON.stringify(message));
             } else if (message.type === 'bombExplosion') {
                 // Broadcast bomb explosion to all other players
                 const explosionData = {
