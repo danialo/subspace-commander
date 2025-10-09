@@ -1338,73 +1338,58 @@
                 ctx.save();
                 ctx.globalAlpha = alpha;
 
-                // Draw bullet based on upgrade level (30% smaller)
+                // Draw bullet based on upgrade level and bounce capability (3-level system)
                 switch(this.upgradeLevel) {
-                    case 0: // Level 0: Basic Red Circle
+                    case 0: // Level 0: Red
                         ctx.fillStyle = this.color;
                         ctx.beginPath();
                         ctx.arc(screenPos.x, screenPos.y, 2.1, 0, Math.PI * 2); // 3 * 0.7 = 2.1
                         ctx.fill();
+                        // Add white border if bouncing enabled
+                        if (this.canBounce) {
+                            ctx.strokeStyle = '#ffffff';
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            ctx.arc(screenPos.x, screenPos.y, 2.8, 0, Math.PI * 2); // 4 * 0.7 = 2.8
+                            ctx.stroke();
+                        }
                         break;
 
-                    case 1: // Level 1: Red Circle with White Border (bouncing)
-                        ctx.fillStyle = this.color;
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 2.1, 0, Math.PI * 2); // 3 * 0.7 = 2.1
-                        ctx.fill();
-                        // White border to show upgrade
-                        ctx.strokeStyle = '#ffffff';
-                        ctx.lineWidth = 1;
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 2.8, 0, Math.PI * 2); // 4 * 0.7 = 2.8
-                        ctx.stroke();
-                        break;
-
-                    case 2: // Level 2: Basic Yellow Circle
+                    case 1: // Level 1: Yellow
                         ctx.fillStyle = this.color;
                         ctx.beginPath();
                         ctx.arc(screenPos.x, screenPos.y, 2.8, 0, Math.PI * 2); // 4 * 0.7 = 2.8
                         ctx.fill();
+                        // Add orange border if bouncing enabled
+                        if (this.canBounce) {
+                            ctx.strokeStyle = '#ff8800';
+                            ctx.lineWidth = 1.4; // 2 * 0.7 = 1.4
+                            ctx.beginPath();
+                            ctx.arc(screenPos.x, screenPos.y, 3.5, 0, Math.PI * 2); // 5 * 0.7 = 3.5
+                            ctx.stroke();
+                        }
                         break;
 
-                    case 3: // Level 3: Yellow Circle with Orange Border
-                        ctx.fillStyle = this.color;
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 2.8, 0, Math.PI * 2); // 4 * 0.7 = 2.8
-                        ctx.fill();
-                        // Orange border for upgrade
-                        ctx.strokeStyle = '#ff8800';
-                        ctx.lineWidth = 1.4; // 2 * 0.7 = 1.4
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 3.5, 0, Math.PI * 2); // 5 * 0.7 = 3.5
-                        ctx.stroke();
-                        break;
-
-                    case 4: // Level 4: Basic Green Circle
-                        ctx.fillStyle = this.color;
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 3.5, 0, Math.PI * 2); // 5 * 0.7 = 3.5
-                        ctx.fill();
-                        break;
-
-                    case 5: // Level 5: Green Circle with Cyan Border + Glow (bouncing)
-                        // Glow effect
-                        ctx.shadowColor = this.color;
-                        ctx.shadowBlur = 5.6; // 8 * 0.7 = 5.6
+                    case 2: // Level 2: Green
+                        // Glow effect if bouncing
+                        if (this.canBounce) {
+                            ctx.shadowColor = this.color;
+                            ctx.shadowBlur = 5.6; // 8 * 0.7 = 5.6
+                        }
                         ctx.fillStyle = this.color;
                         ctx.beginPath();
                         ctx.arc(screenPos.x, screenPos.y, 3.5, 0, Math.PI * 2); // 5 * 0.7 = 3.5
                         ctx.fill();
 
-                        // Reset shadow
-                        ctx.shadowBlur = 0;
-
-                        // Cyan border for max upgrade
-                        ctx.strokeStyle = '#00ffff';
-                        ctx.lineWidth = 1.4; // 2 * 0.7 = 1.4
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 4.2, 0, Math.PI * 2); // 6 * 0.7 = 4.2
-                        ctx.stroke();
+                        // Reset shadow and add cyan border if bouncing
+                        if (this.canBounce) {
+                            ctx.shadowBlur = 0;
+                            ctx.strokeStyle = '#00ffff';
+                            ctx.lineWidth = 1.4; // 2 * 0.7 = 1.4
+                            ctx.beginPath();
+                            ctx.arc(screenPos.x, screenPos.y, 4.2, 0, Math.PI * 2); // 6 * 0.7 = 4.2
+                            ctx.stroke();
+                        }
                         break;
                 }
 
