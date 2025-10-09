@@ -283,6 +283,7 @@
                 <label><input type="checkbox" class="powerup-checkbox" value="thrust"> Thrust</label>
                 <label><input type="checkbox" class="powerup-checkbox" value="rotation"> Rotation</label>
                 <label><input type="checkbox" class="powerup-checkbox" value="wall"> Wall</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="bouncing"> Bouncing</label>
             </div>
 
             <div class="config-slider" style="margin-top: 10px;">
@@ -1113,6 +1114,13 @@
                         effect: 'rotation',
                         name: 'ROTATION UPGRADE',
                         message: '+33% Turn Rate (Permanent!)'
+                    },
+                    bouncing: {
+                        spriteIndex: 8,
+                        color: '#00ffff',
+                        effect: 'bouncing',
+                        name: 'BOUNCING BULLETS',
+                        message: 'Bullets bounce off walls!'
                     }
                 };
 
@@ -1235,6 +1243,12 @@
                         if (ship.rotationLevel < UPGRADE_LIMITS.rotationLevel) {
                             ship.rotationLevel++;
                             ship.updateStatsFromLevels();
+                        }
+                        break;
+                    case 'bouncing':
+                        // Enable bouncing bullets (permanent, one-time toggle)
+                        if (!ship.bulletBounce) {
+                            ship.bulletBounce = true;
                         }
                         break;
                 }
@@ -2928,7 +2942,8 @@
                     shield: [392, 784], // G4 to G5
                     recharge: [494, 988], // B4 to B5
                     thrust: [587, 1175], // D5 to D6
-                    rotation: [698, 1397] // F5 to F6
+                    rotation: [698, 1397], // F5 to F6
+                    bouncing: [784, 1568] // G5 to G6
                 };
 
                 const freqs = frequencies[type] || frequencies.energy;
@@ -2956,7 +2971,7 @@
             }
 
             spawnInitialPowerUps() {
-                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall'];
+                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'bouncing'];
 
                 // Spawn 6 initial power-ups (100% increase from 3)
                 for (let i = 0; i < 6; i++) {
@@ -2970,7 +2985,7 @@
             }
 
             spawnPowerUp() {
-                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall'];
+                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'bouncing'];
                 const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
                 console.log(`Spawning power-up: ${type}`); // Debug log
 
