@@ -554,7 +554,8 @@
                 const baseBulletCost = 67;
                 const energyCosts = [67, 90, 140]; // Energy cost per level
                 this.fireEnergy = energyCosts[Math.min(this.weaponLevel, 2)] || baseBulletCost;
-                this.energyRecharge = baseEnergyRecharge * (1 + this.rechargeLevel * 1.0);
+                // Reduced recharge scaling: +50% per level instead of +100%
+                this.energyRecharge = baseEnergyRecharge * (1 + this.rechargeLevel * 0.5);
                 this.baseEnergyRecharge = baseEnergyRecharge;
                 const energyUseMultiplier = this.boostEnergyUseMultiplier || 3.0;
                 this.boostEnergyDrainPerSecond = this.energyRecharge * energyUseMultiplier;
