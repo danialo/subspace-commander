@@ -2991,7 +2991,12 @@
                     return false;
                 }
 
-                if (bomb && bomb.isMine && bomb.ownerId && playerId && bomb.ownerId === playerId) {
+                // Prevent self-damage: only if we have distinct player IDs and they match
+                // In multiplayer, bomb.ownerId will be the actual player ID
+                // We skip this check if ownerId is 'local' (single player mode)
+                if (bomb && bomb.ownerId && playerId &&
+                    bomb.ownerId !== 'local' && playerId !== 'local' &&
+                    bomb.ownerId === playerId) {
                     return false;
                 }
 
@@ -4575,15 +4580,15 @@
                         }
                     }
 
-                    // Check bomb-wall collisions (bombs bounce once, then destroy)
+                    // Check bomb-wall collisions (bombs bounce once, then explode)
                     for (let i = this.bombs.length - 1; i >= 0; i--) {
                         const bomb = this.bombs[i];
                         let bombDestroyed = false;
                         for (const wall of this.walls) {
                             if (wall.checkBombCollision(bomb)) {
-                                this.bombs.splice(i, 1);
+                                this.explodeBomb(bomb, i);
                                 bombDestroyed = true;
-                                break; // Bomb destroyed, check next bomb
+                                break; // Bomb exploded, check next bomb
                             }
                         }
                         if (bombDestroyed) continue;
@@ -4592,7 +4597,7 @@
                     // Check bomb proximity to players
                     for (let i = this.bombs.length - 1; i >= 0; i--) {
                         const bomb = this.bombs[i];
-                        const proximityRadius = 60; // Bombs explode within 60 pixels
+                        const proximityRadius = 35; // Bombs explode within 35 pixels
 
                         // Check proximity to local player
                         if (this.checkBombPlayerProximity(bomb, this.playerShip, proximityRadius, this.playerId || 'local')) {
