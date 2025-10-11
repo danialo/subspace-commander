@@ -13,6 +13,7 @@
 - [ ] Fix walls.
 - [x] Make wall drops 90 degrees.
 - [x] Add a warp to safe zone option (F7) requiring full energy.
+- [x] Add warp beacon device (Shift+1 deploy, 1 recall) with 180s timer, local timer display, and minimap indicator.
 - [ ] Anti-warp.
 - [ ] Investigate multiplayer bounty not increasing.
 - [ ] Adjust braking response.

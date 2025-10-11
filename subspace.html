@@ -179,6 +179,7 @@
             <div>Shield: <span id="shieldStatus">Inactive</span></div>
             <div>Bounty: <span id="powerUps">0</span></div>
             <div>Walls: <span id="wallCount">0</span></div>
+            <div>Warp: <span id="warpStatus">None</span></div>
             <div>Deaths: <span id="deaths">0</span></div>
             <div style="margin-top: 10px; border-top: 1px solid #0ff; padding-top: 5px;">
                 <div style="font-size: 10px; color: #aaa;">SHIP & UPGRADES:</div>
@@ -207,6 +208,8 @@
             <div>TAB - Fire Bombs</div>
             <div>F2 - Deploy Wall</div>
             <div>F3 - Burst Push</div>
+            <div>SHIFT+1 - Deploy Warp Beacon</div>
+            <div>1 - Warp to Beacon</div>
             <div>SPACE - Brake</div>
             <div style="margin-top: 10px; border-top: 1px solid #0ff; padding-top: 5px;">
                 <button id="multiplayerBtn" onclick="game.connectToMultiplayer()" style="background: #000; color: #0ff; border: 1px solid #0ff; padding: 5px 10px; font-family: inherit; font-size: 12px; cursor: pointer;">JOIN MULTIPLAYER</button>
@@ -279,6 +282,7 @@
                 <label><input type="checkbox" class="powerup-checkbox" value="thrust"> Thrust</label>
                 <label><input type="checkbox" class="powerup-checkbox" value="rotation"> Rotation</label>
                 <label><input type="checkbox" class="powerup-checkbox" value="wall"> Wall</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="warp"> Warp</label>
             </div>
 
             <div class="config-slider" style="margin-top: 10px;">
@@ -306,8 +310,11 @@
             rechargeLevel: 10,
             thrustLevel: 10,
             rotationLevel: 3,
-            wallCount: 10
+            wallCount: 10,
+            warpCount: 3
         });
+
+        const WARP_BEACON_LIFETIME_MS = 180000;
 
         function clampValue(value, min, max) {
             const numeric = Number(value);
@@ -504,10 +511,12 @@
                 this.energyLevel = 0; // +200 max energy per level
                 this.rotationLevel = 0; // +33% turn rate per level
                 this.wallCount = 0; // Number of deployable walls
+                this.warpCount = 0; // Warp devices collected
                 this.shieldActive = false;
                 this.shieldTimer = 0;
                 this.repelBoostTimer = 0;
                 this.repelSpeedMultiplierActive = 1;
+                this.activeWarpBeacon = null;
 
                 // Calculate current stats based on levels
                 this.updateStatsFromLevels();
@@ -572,6 +581,7 @@
                 this.thrustLevel = clampValue(this.thrustLevel, 0, UPGRADE_LIMITS.thrustLevel);
                 this.rotationLevel = clampValue(this.rotationLevel, 0, UPGRADE_LIMITS.rotationLevel);
                 this.wallCount = clampValue(this.wallCount, 0, UPGRADE_LIMITS.wallCount);
+                this.warpCount = clampValue(this.warpCount, 0, UPGRADE_LIMITS.warpCount);
             }
 
             resetUpgrades() {
@@ -583,6 +593,7 @@
                 this.energyLevel = 0;
                 this.rotationLevel = 0;
                 this.wallCount = 0;
+                this.warpCount = 0;
                 this.updateStatsFromLevels();
             }
 
@@ -1105,6 +1116,13 @@
                         effect: 'rotation',
                         name: 'ROTATION UPGRADE',
                         message: '+33% Turn Rate (Permanent!)'
+                    },
+                    warp: {
+                        spriteIndex: 8,
+                        color: '#7c4dff',
+                        effect: 'warp',
+                        name: 'WARP DEVICE',
+                        message: 'Drop a warp beacon (Shift+1)!'
                     }
                 };
 
@@ -1220,6 +1238,11 @@
                         // Add wall to inventory
                         if (ship.wallCount < UPGRADE_LIMITS.wallCount) {
                             ship.wallCount++;
+                        }
+                        break;
+                    case 'warp':
+                        if (ship.warpCount < UPGRADE_LIMITS.warpCount) {
+                            ship.warpCount++;
                         }
                         break;
                     case 'rotation':
@@ -1695,6 +1718,63 @@
             }
         }
 
+        class WarpBeacon {
+            constructor({ id, ownerId, x, y, expiresAt, createdAt }) {
+                this.id = id;
+                this.ownerId = ownerId;
+                this.pos = new Vector2D(x, y);
+                const now = Date.now();
+                this.createdAt = Number.isFinite(createdAt) ? createdAt : now;
+                this.expiresAt = Number.isFinite(expiresAt) ? expiresAt : this.createdAt + WARP_BEACON_LIFETIME_MS;
+            }
+
+            remainingMs(now = Date.now()) {
+                return Math.max(0, this.expiresAt - now);
+            }
+
+            isExpired(now = Date.now()) {
+                return this.remainingMs(now) <= 0;
+            }
+
+            getLifetimeRatio(now = Date.now()) {
+                return Math.min(1, Math.max(0, this.remainingMs(now) / WARP_BEACON_LIFETIME_MS));
+            }
+
+            draw(ctx, viewport, now = Date.now()) {
+                const screenPos = viewport.worldToScreen(this.pos.x, this.pos.y);
+                const ratio = this.getLifetimeRatio(now);
+                const baseRadius = Math.max(16, 24 * viewport.zoom);
+                const pulse = 0.6 + 0.3 * Math.sin(now / 200);
+
+                ctx.save();
+
+                ctx.globalAlpha = 0.35 + 0.4 * ratio;
+                ctx.strokeStyle = '#7c4dff';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(screenPos.x, screenPos.y, baseRadius * pulse, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.globalAlpha = 0.5;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(screenPos.x, screenPos.y, baseRadius * 0.6, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.globalAlpha = 0.8;
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(screenPos.x - baseRadius * 0.6, screenPos.y);
+                ctx.lineTo(screenPos.x + baseRadius * 0.6, screenPos.y);
+                ctx.moveTo(screenPos.x, screenPos.y - baseRadius * 0.6);
+                ctx.lineTo(screenPos.x, screenPos.y + baseRadius * 0.6);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+        }
+
         // Viewport class for camera/scrolling
         class Viewport {
             constructor(canvasWidth, canvasHeight) {
@@ -1841,6 +1921,41 @@
                 });
             }
 
+            drawWarpBeacon(beacon, isLocal = false) {
+                const pos = this.worldToMinimap(beacon.pos.x, beacon.pos.y);
+
+                if (isLocal) {
+                    // Flashing white dot for local beacon
+                    const now = Date.now();
+                    const flashCycle = Math.sin(now / 300); // Flash every ~600ms
+                    const alpha = 0.5 + 0.5 * flashCycle; // Oscillate between 0.5 and 1.0
+
+                    this.ctx.fillStyle = '#ffffff';
+                    this.ctx.globalAlpha = alpha;
+                    this.ctx.beginPath();
+                    this.ctx.arc(pos.x, pos.y, 3, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    this.ctx.globalAlpha = 1;
+                } else {
+                    // Non-local beacons keep the purple style
+                    const stroke = '#b388ff';
+                    const radius = 3;
+
+                    this.ctx.strokeStyle = stroke;
+                    this.ctx.lineWidth = 1;
+                    this.ctx.beginPath();
+                    this.ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+                    this.ctx.stroke();
+
+                    this.ctx.fillStyle = stroke;
+                    this.ctx.globalAlpha = 0.7;
+                    this.ctx.beginPath();
+                    this.ctx.arc(pos.x, pos.y, Math.max(1.5, radius * 0.5), 0, Math.PI * 2);
+                    this.ctx.fill();
+                    this.ctx.globalAlpha = 1;
+                }
+            }
+
             update(game) {
                 this.clear();
 
@@ -1863,6 +1978,16 @@
                     game.bombs.forEach(bomb => {
                         if (bomb && bomb.pos) {
                             this.drawBomb(bomb.pos.x, bomb.pos.y, bomb.isMine || false);
+                        }
+                    });
+                }
+
+                if (game.warpBeacons) {
+                    const now = Date.now();
+                    game.warpBeacons.forEach((beacon, ownerId) => {
+                        if (beacon && !beacon.isExpired(now)) {
+                            const isLocal = ownerId === (game.playerId || 'local');
+                            this.drawWarpBeacon(beacon, isLocal);
                         }
                     });
                 }
@@ -1966,9 +2091,6 @@
                 // Create player ship in world coordinates
                 this.playerShip = new Ship(this.viewport.worldWidth / 2, this.viewport.worldHeight / 2, true);
 
-                // Other ships for testing
-                this.ships = [this.playerShip];
-
                 // Power-ups system
                 this.powerUps = [];
                 this.powerUpSpawnTimer = 0;
@@ -2003,6 +2125,10 @@
 
                 // Walls system
                 this.walls = [];
+
+                // Warp system
+                this.warpBeacons = new Map();
+                this.warpBeaconLifetimeMs = WARP_BEACON_LIFETIME_MS;
 
                 // Bounty timer system
                 this.bountyTimer = 0;
@@ -2116,8 +2242,31 @@
                                 this.otherPlayers.set(player.id, new Ship(player.x, player.y, false, shipType));
                                 const existingBounty = Number.isFinite(player.bounty) ? player.bounty : 0;
                                 this.setPlayerBounty(player.id, existingBounty);
+                                if (player.warpBeacon && Number.isFinite(player.warpBeacon.x) && Number.isFinite(player.warpBeacon.y)) {
+                                    const expiresAt = Number(player.warpBeacon.expiresAt);
+                                    this.setWarpBeaconForPlayer(player.id, {
+                                        id: typeof player.warpBeacon.id === 'string' ? player.warpBeacon.id : this.generateEntityId('warp'),
+                                        ownerId: player.id,
+                                        x: player.warpBeacon.x,
+                                        y: player.warpBeacon.y,
+                                        createdAt: Number(player.warpBeacon.createdAt) || this.getNow(),
+                                        expiresAt: Number.isFinite(expiresAt) ? expiresAt : this.getNow() + this.warpBeaconLifetimeMs
+                                    }, { announce: false });
+                                }
                             }
                         });
+                        if (data.selfWarpBeacon && Number.isFinite(data.selfWarpBeacon.x) && Number.isFinite(data.selfWarpBeacon.y)) {
+                            const expiresAt = Number(data.selfWarpBeacon.expiresAt);
+                            this.setWarpBeaconForPlayer(this.playerId, {
+                                id: typeof data.selfWarpBeacon.id === 'string' ? data.selfWarpBeacon.id : this.generateEntityId('warp'),
+                                ownerId: this.playerId,
+                                x: data.selfWarpBeacon.x,
+                                y: data.selfWarpBeacon.y,
+                                createdAt: Number(data.selfWarpBeacon.createdAt) || this.getNow(),
+                                expiresAt: Number.isFinite(expiresAt) ? expiresAt : this.getNow() + this.warpBeaconLifetimeMs
+                            }, { announce: false });
+                            this.updateHUD();
+                        }
                         this.updateLocalBounty(true);
                         this.broadcastPlayerState(true);
                         break;
@@ -2134,6 +2283,9 @@
                     case 'playerLeft':
                         this.otherPlayers.delete(data.playerId);
                         this.playerBounties.delete(data.playerId);
+                        if (data.playerId) {
+                            this.clearWarpBeacon(data.playerId, { announce: false });
+                        }
                         break;
 
                     case 'playerMove':
@@ -2156,7 +2308,13 @@
                                 data.weaponLevel || 0,
                                 data.playerId
                             );
-                            this.playerShip.bullets.push(bullet);
+                            const ownerShip = this.otherPlayers.get(data.playerId);
+                            if (ownerShip && Array.isArray(ownerShip.bullets)) {
+                                ownerShip.bullets.push(bullet);
+                            } else if (this.playerShip && Array.isArray(this.playerShip.bullets)) {
+                                // Fallback to keep the projectile visible until the remote ship is tracked
+                                this.playerShip.bullets.push(bullet);
+                            }
                         }
                         break;
 
@@ -2207,6 +2365,76 @@
                     case 'warpDenied':
                         // Ignore for now or display notice
                         break;
+                    case 'warpSet': {
+                        const ownerId = typeof data.playerId === 'string' ? data.playerId : null;
+                        const warpX = Number(data.x);
+                        const warpY = Number(data.y);
+                        if (!ownerId || !Number.isFinite(warpX) || !Number.isFinite(warpY)) {
+                            break;
+                        }
+                        const expiresAt = Number(data.expiresAt);
+                        const createdAt = Number(data.createdAt);
+                        const beaconId = typeof data.beaconId === 'string' ? data.beaconId : this.generateEntityId('warp');
+                        const isLocal = this.isLocalPlayer(ownerId);
+                        this.setWarpBeaconForPlayer(ownerId, {
+                            id: beaconId,
+                            ownerId,
+                            x: warpX,
+                            y: warpY,
+                            createdAt: Number.isFinite(createdAt) ? createdAt : this.getNow(),
+                            expiresAt: Number.isFinite(expiresAt) ? expiresAt : this.getNow() + this.warpBeaconLifetimeMs
+                        }, { announce: !isLocal });
+                        if (isLocal) {
+                            this.updateHUD();
+                        }
+                        break;
+                    }
+                    case 'warpActivate': {
+                        const ownerId = typeof data.playerId === 'string' ? data.playerId : null;
+                        const warpX = Number(data.x);
+                        const warpY = Number(data.y);
+                        if (!ownerId || !Number.isFinite(warpX) || !Number.isFinite(warpY)) {
+                            break;
+                        }
+                        this.performWarpReturn(ownerId, warpX, warpY);
+                        this.clearWarpBeacon(ownerId, { announce: false });
+                        if (this.isLocalPlayer(ownerId)) {
+                            this.updateHUD();
+                        }
+                        break;
+                    }
+                    case 'warpExpired': {
+                        const ownerId = typeof data.playerId === 'string' ? data.playerId : null;
+                        if (!ownerId) {
+                            break;
+                        }
+                        const beacon = this.getWarpBeacon(ownerId);
+                        if (beacon && data.beaconId && beacon.id !== data.beaconId) {
+                            break;
+                        }
+                        const isLocal = this.isLocalPlayer(ownerId);
+                        this.clearWarpBeacon(ownerId, { announce: isLocal, reason: 'expired' });
+                        if (isLocal) {
+                            this.updateHUD();
+                        }
+                        break;
+                    }
+                    case 'warpSetFailed': {
+                        if (!this.isLocalPlayer(data.playerId)) {
+                            break;
+                        }
+                        const reason = typeof data.reason === 'string' ? data.reason : '';
+                        let subtitle = '';
+                        if (reason === 'safezone') {
+                            subtitle = 'Cannot deploy inside safe zone';
+                        } else if (reason === 'invalid') {
+                            subtitle = 'Invalid warp position';
+                        }
+                        this.showWarpNotification('Warp placement failed', subtitle);
+                        this.playerShip.warpCount = Math.min(UPGRADE_LIMITS.warpCount, (this.playerShip.warpCount || 0) + 1);
+                        this.updateHUD();
+                        break;
+                    }
 
                     case 'wall':
                         if (data.playerId !== this.playerId) {
@@ -2298,6 +2526,13 @@
                                 )
                             );
                         }
+                        if (data.victimId) {
+                            const announce = this.isLocalPlayer(data.victimId);
+                            this.clearWarpBeacon(data.victimId, { announce });
+                            if (announce) {
+                                this.updateHUD();
+                            }
+                        }
                         break;
                     case 'bountyUpdate':
                         if (!this.isLocalPlayer(data.playerId) && Number.isFinite(data.bounty)) {
@@ -2307,6 +2542,9 @@
                     case 'playerDisconnected':
                         this.otherPlayers.delete(data.id);
                         this.playerBounties.delete(data.id);
+                        if (data.id) {
+                            this.clearWarpBeacon(data.id, { announce: false });
+                        }
                         break;
                     case 'shipChange':
                         if (data.playerId === this.playerId) {
@@ -2541,6 +2779,9 @@
             handlePlayerDeath(killerInfo) {
                 const killerId = killerInfo && killerInfo.attackerId ? killerInfo.attackerId : null;
                 const victimBounty = this.powerUpsCollected;
+
+                this.clearWarpBeacon(this.getLocalPlayerId(), { announce: false });
+                this.updateHUD();
 
                 let killerBounty = null;
                 const isValidKillOpponent = killerId && killerId !== this.playerId;
@@ -2923,7 +3164,8 @@
                     shield: [392, 784], // G4 to G5
                     recharge: [494, 988], // B4 to B5
                     thrust: [587, 1175], // D5 to D6
-                    rotation: [698, 1397] // F5 to F6
+                    rotation: [698, 1397], // F5 to F6
+                    warp: [880, 660]
                 };
 
                 const freqs = frequencies[type] || frequencies.energy;
@@ -2951,7 +3193,7 @@
             }
 
             spawnInitialPowerUps() {
-                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall'];
+                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp'];
 
                 // Spawn 6 initial power-ups (100% increase from 3)
                 for (let i = 0; i < 6; i++) {
@@ -2965,7 +3207,7 @@
             }
 
             spawnPowerUp() {
-                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall'];
+                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp'];
                 const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
                 console.log(`Spawning power-up: ${type}`); // Debug log
 
@@ -3036,10 +3278,35 @@
                 return { x: clampedX, y: clampedY };
             }
 
+            getAllShips() {
+                const ships = [];
+                if (this.playerShip) {
+                    ships.push(this.playerShip);
+                }
+                if (this.otherPlayers && this.otherPlayers.size) {
+                    for (const ship of this.otherPlayers.values()) {
+                        if (ship) {
+                            ships.push(ship);
+                        }
+                    }
+                }
+                return ships;
+            }
+
             setupEventListeners() {
                 document.addEventListener('keydown', (e) => {
                     if (e.code === 'F7') {
                         this.attemptWarpToSafeZone();
+                        e.preventDefault();
+                        return;
+                    }
+                    if ((e.code === 'Digit1' || e.code === 'Numpad1') && e.shiftKey) {
+                        this.tryPlaceWarpBeacon();
+                        e.preventDefault();
+                        return;
+                    }
+                    if ((e.code === 'Digit1' || e.code === 'Numpad1') && !e.shiftKey) {
+                        this.tryActivateWarpBeacon();
                         e.preventDefault();
                         return;
                     }
@@ -3162,6 +3429,237 @@
                 }
             }
 
+            getNow() {
+                return Date.now();
+            }
+
+            getLocalPlayerId() {
+                return this.playerId || 'local';
+            }
+
+            getWarpBeacon(ownerId = this.getLocalPlayerId()) {
+                return this.warpBeacons.get(ownerId) || null;
+            }
+
+            setWarpBeaconForPlayer(ownerId, beaconData, options = {}) {
+                if (!ownerId || !beaconData) {
+                    return null;
+                }
+
+                const { announce = false, replace = true } = options;
+                if (replace) {
+                    this.clearWarpBeacon(ownerId, { announce: false });
+                }
+
+                const beacon = beaconData instanceof WarpBeacon
+                    ? beaconData
+                    : new WarpBeacon({ ownerId, ...beaconData });
+
+                this.warpBeacons.set(ownerId, beacon);
+
+                const ship = ownerId === this.playerId ? this.playerShip : this.otherPlayers.get(ownerId);
+                if (ship) {
+                    ship.activeWarpBeacon = beacon;
+                }
+
+                if (announce && ownerId === this.getLocalPlayerId()) {
+                    this.showWarpNotification('Warp beacon deployed', 'Press 1 to warp back');
+                }
+
+                return beacon;
+            }
+
+            clearWarpBeacon(ownerId, options = {}) {
+                const beacon = this.warpBeacons.get(ownerId);
+                if (!beacon) {
+                    return null;
+                }
+
+                this.warpBeacons.delete(ownerId);
+
+                const ship = ownerId === this.playerId ? this.playerShip : this.otherPlayers.get(ownerId);
+                if (ship) {
+                    ship.activeWarpBeacon = null;
+                }
+
+                const { announce = false, reason = null } = options;
+                if (announce && ownerId === this.getLocalPlayerId()) {
+                    let title = 'Warp beacon cleared';
+                    let subtitle = '';
+                    if (reason === 'expired') {
+                        title = 'Warp beacon expired';
+                        subtitle = 'Device consumed';
+                    } else if (reason === 'failed') {
+                        title = 'Warp placement failed';
+                    }
+                    this.showWarpNotification(title, subtitle);
+                }
+
+                return beacon;
+            }
+
+            updateWarpBeacons(now = this.getNow()) {
+                for (const [ownerId, beacon] of this.warpBeacons) {
+                    if (!beacon) {
+                        this.warpBeacons.delete(ownerId);
+                        continue;
+                    }
+
+                    if (beacon.isExpired(now)) {
+                        const isLocal = ownerId === this.getLocalPlayerId();
+                        this.clearWarpBeacon(ownerId, { announce: isLocal, reason: 'expired' });
+                        if (isLocal && this.isMultiplayer) {
+                            this.sendMultiplayerMessage({
+                                type: 'warpExpired',
+                                beaconId: beacon.id
+                            });
+                        }
+                    }
+                }
+            }
+
+            showWarpNotification(title, subtitle = '') {
+                const container = document.getElementById('messageContainer');
+                if (!container) {
+                    return;
+                }
+
+                const messageEl = document.createElement('div');
+                messageEl.className = 'power-up-message';
+                messageEl.style.color = '#7c4dff';
+                messageEl.style.borderColor = '#7c4dff';
+                messageEl.style.textShadow = '2px 2px 4px #000, 0 0 15px #7c4dff';
+
+                const titleEl = document.createElement('div');
+                titleEl.style.fontSize = '26px';
+                titleEl.style.marginBottom = subtitle ? '4px' : '0';
+                titleEl.textContent = title;
+                messageEl.appendChild(titleEl);
+
+                if (subtitle) {
+                    const subtitleEl = document.createElement('div');
+                    subtitleEl.style.fontSize = '16px';
+                    subtitleEl.textContent = subtitle;
+                    messageEl.appendChild(subtitleEl);
+                }
+
+                container.appendChild(messageEl);
+
+                setTimeout(() => {
+                    if (messageEl.parentNode) {
+                        messageEl.parentNode.removeChild(messageEl);
+                    }
+                }, 2600);
+            }
+
+            tryPlaceWarpBeacon() {
+                const ship = this.playerShip;
+                if (!ship) {
+                    return;
+                }
+                if (ship.warpCount <= 0) {
+                    this.showWarpNotification('No warp device available', 'Collect warp power-ups');
+                    return;
+                }
+
+                if (this.safeZone && this.isInSafeZone(ship.pos.x, ship.pos.y)) {
+                    this.showWarpNotification('Cannot deploy in safe zone');
+                    return;
+                }
+
+                const ownerId = this.getLocalPlayerId();
+                const now = this.getNow();
+                const beaconId = this.generateEntityId('warp');
+                const expiresAt = now + this.warpBeaconLifetimeMs;
+
+                ship.warpCount = Math.max(0, ship.warpCount - 1);
+
+                const beacon = this.setWarpBeaconForPlayer(ownerId, {
+                    id: beaconId,
+                    ownerId,
+                    x: ship.pos.x,
+                    y: ship.pos.y,
+                    createdAt: now,
+                    expiresAt
+                }, { announce: true });
+
+                if (this.isMultiplayer) {
+                    this.sendMultiplayerMessage({
+                        type: 'warpSet',
+                        beaconId,
+                        x: beacon.pos.x,
+                        y: beacon.pos.y,
+                        expiresAt
+                    });
+                }
+
+                this.updateHUD();
+            }
+
+            tryActivateWarpBeacon() {
+                const ownerId = this.getLocalPlayerId();
+                const beacon = this.getWarpBeacon(ownerId);
+                if (!beacon) {
+                    this.showWarpNotification('No warp beacon deployed');
+                    return;
+                }
+
+                const now = this.getNow();
+                if (beacon.isExpired(now)) {
+                    this.clearWarpBeacon(ownerId, { announce: true, reason: 'expired' });
+                    this.updateHUD();
+                    return;
+                }
+
+                this.performWarpReturn(ownerId, beacon.pos.x, beacon.pos.y);
+                this.clearWarpBeacon(ownerId, { announce: false });
+                this.showWarpNotification('Warp engaged', 'Returned to beacon');
+
+                if (this.isMultiplayer) {
+                    this.sendMultiplayerMessage({
+                        type: 'warpActivate',
+                        beaconId: beacon.id,
+                        x: beacon.pos.x,
+                        y: beacon.pos.y
+                    });
+                }
+
+                this.updateHUD();
+            }
+
+            performWarpReturn(playerId, x, y) {
+                const ship = playerId === this.playerId ? this.playerShip : this.otherPlayers.get(playerId);
+                if (!ship) {
+                    return;
+                }
+
+                const clamped = this.clampPositionToWorld(x, y, 40);
+                ship.pos.x = clamped.x;
+                ship.pos.y = clamped.y;
+                if (ship.vel) {
+                    ship.vel.x = 0;
+                    ship.vel.y = 0;
+                }
+                if (ship.boostActive !== undefined) {
+                    ship.boostActive = false;
+                }
+                if (ship.repelBoostTimer !== undefined) {
+                    ship.repelBoostTimer = 0;
+                    ship.repelSpeedMultiplierActive = 1;
+                }
+
+                if (playerId === this.playerId) {
+                    this.clearLocalOrdnance();
+                    this.lastBroadcastState.time = 0;
+                    this.lastBroadcastState.x = ship.pos.x;
+                    this.lastBroadcastState.y = ship.pos.y;
+                    this.lastBroadcastState.rotation = ship.angle;
+                    this.broadcastPlayerState(true);
+                } else {
+                    this.clearOrdnanceForPlayer(playerId);
+                }
+            }
+
             updateHUD() {
                 const ship = this.playerShip;
 
@@ -3189,6 +3687,19 @@
                 }
                 document.getElementById('powerUps').textContent = this.powerUpsCollected;
                 document.getElementById('wallCount').textContent = formatLevelDisplay(ship.wallCount, UPGRADE_LIMITS.wallCount);
+                const warpStatusEl = document.getElementById('warpStatus');
+                if (warpStatusEl) {
+                    const now = this.getNow();
+                    const beacon = this.getWarpBeacon();
+                    if (beacon && !beacon.isExpired(now)) {
+                        const remaining = Math.ceil(beacon.remainingMs(now) / 1000);
+                        warpStatusEl.textContent = `Beacon ${remaining}s`;
+                    } else if (ship.warpCount > 0) {
+                        warpStatusEl.textContent = ship.warpCount === 1 ? 'Ready (1)' : `Ready (${ship.warpCount})`;
+                    } else {
+                        warpStatusEl.textContent = 'None';
+                    }
+                }
                 document.getElementById('deaths').textContent = ship.deaths;
 
                 // Upgrade levels and their effects
@@ -3265,17 +3776,20 @@
 
                 this.drawSafeZone();
 
-                // Draw all ships that are visible
-                for (const ship of this.ships) {
-                    if (this.viewport.isVisible(ship)) {
-                        ship.draw(this.ctx, this.viewport);
+                const warpRenderTime = this.getNow();
+                for (const beacon of this.warpBeacons.values()) {
+                    if (beacon && !beacon.isExpired(warpRenderTime) && this.viewport.isVisible(beacon)) {
+                        beacon.draw(this.ctx, this.viewport, warpRenderTime);
                     }
                 }
 
-                // Draw other multiplayer players
+                if (this.playerShip && this.viewport.isVisible(this.playerShip)) {
+                    this.playerShip.draw(this.ctx, this.viewport);
+                }
+
                 if (this.isMultiplayer) {
-                    for (const [playerId, player] of this.otherPlayers) {
-                        if (this.viewport.isVisible(player)) {
+                    for (const player of this.otherPlayers.values()) {
+                        if (player && this.viewport.isVisible(player)) {
                             player.draw(this.ctx, this.viewport);
                         }
                     }
@@ -3320,6 +3834,9 @@
 
                 // Only draw world boundaries if we're near them
                 this.drawWorldBounds();
+
+                // Draw warp timer overlay for local beacon
+                this.drawWarpTimer();
             }
 
             isInSafeZone(x, y) {
@@ -3400,6 +3917,65 @@
                         }
                     }
                 }
+            }
+
+            drawWarpTimer() {
+                const now = this.getNow();
+                const beacon = this.getWarpBeacon();
+
+                if (!beacon || beacon.isExpired(now)) {
+                    return;
+                }
+
+                const remainingSeconds = Math.ceil(beacon.remainingMs(now) / 1000);
+                const minutes = Math.floor(remainingSeconds / 60);
+                const seconds = remainingSeconds % 60;
+                const timeText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+                this.ctx.save();
+
+                // Position at top center of screen
+                const centerX = this.canvas.width / 2;
+                const topY = 60;
+
+                // Measure text
+                this.ctx.font = 'bold 24px "Courier New", monospace';
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                const textMetrics = this.ctx.measureText(timeText);
+                const textWidth = textMetrics.width;
+                const textHeight = 24;
+
+                // Draw transparent background
+                const padding = 15;
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                this.ctx.fillRect(
+                    centerX - textWidth / 2 - padding,
+                    topY - textHeight / 2 - padding,
+                    textWidth + padding * 2,
+                    textHeight + padding * 2
+                );
+
+                // Draw border
+                this.ctx.strokeStyle = '#7c4dff';
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(
+                    centerX - textWidth / 2 - padding,
+                    topY - textHeight / 2 - padding,
+                    textWidth + padding * 2,
+                    textHeight + padding * 2
+                );
+
+                // Draw timer text
+                this.ctx.fillStyle = '#ffffff';
+                this.ctx.fillText(timeText, centerX, topY);
+
+                // Draw small "WARP" label
+                this.ctx.font = 'bold 10px "Courier New", monospace';
+                this.ctx.fillStyle = '#7c4dff';
+                this.ctx.fillText('WARP', centerX, topY - textHeight / 2 - padding - 8);
+
+                this.ctx.restore();
             }
 
             drawWorldBounds() {
@@ -3842,16 +4418,10 @@
                         this.broadcastPlayerState(isInputActive);
                     }
 
-                    // Update all ships
-                    for (const ship of this.ships) {
-                        ship.update(deltaTime);
-                    }
+                    const allShips = this.getAllShips();
 
-                    // Update other players
-                    if (this.isMultiplayer) {
-                        for (const [playerId, player] of this.otherPlayers) {
-                            player.update(deltaTime);
-                        }
+                    for (const ship of allShips) {
+                        ship.update(deltaTime);
                     }
 
                     // Update power-ups
@@ -3887,9 +4457,15 @@
                     this.walls = this.walls.filter(wall => !wall.expired());
 
                     // Check bullet-wall collisions
-                    for (const ship of this.ships) {
+                    for (const ship of allShips) {
+                        if (!ship || !Array.isArray(ship.bullets)) {
+                            continue;
+                        }
                         for (let i = ship.bullets.length - 1; i >= 0; i--) {
                             const bullet = ship.bullets[i];
+                            if (!bullet) {
+                                continue;
+                            }
                             for (const wall of this.walls) {
                                 if (wall.checkBulletCollision(bullet)) {
                                     ship.bullets.splice(i, 1);
@@ -3900,26 +4476,40 @@
                     }
 
                     // Check bullet-player collisions
-                    for (const ship of this.ships) {
+                    for (const ship of allShips) {
+                        if (!ship || !Array.isArray(ship.bullets)) {
+                            continue;
+                        }
                         for (let i = ship.bullets.length - 1; i >= 0; i--) {
                             const bullet = ship.bullets[i];
-
-                            // Check collision with local player
-                            if (this.checkBulletPlayerCollision(bullet, this.playerShip)) {
-                                const attackerId = bullet.ownerId || null;
-                                this.damagePlayer(
-                                    bullet.weaponLevel || bullet.upgradeLevel || 0,
-                                    attackerId
-                                );
-                                ship.bullets.splice(i, 1);
+                            if (!bullet) {
                                 continue;
                             }
 
-                            // Check collision with other multiplayer players
+                            const ownerId = typeof bullet.ownerId === 'string' ? bullet.ownerId : null;
+                            const isLocalBullet = ship === this.playerShip || ownerId === this.playerId || ownerId === 'local';
+
+                            if (!isLocalBullet) {
+                                if (this.checkBulletPlayerCollision(bullet, this.playerShip)) {
+                                    this.damagePlayer(
+                                        bullet.weaponLevel || bullet.upgradeLevel || 0,
+                                        ownerId
+                                    );
+                                    ship.bullets.splice(i, 1);
+                                }
+                                continue;
+                            }
+
+                            if (ship === this.playerShip && this.checkBulletPlayerCollision(bullet, this.playerShip)) {
+                                continue;
+                            }
+
                             for (const [playerId, otherPlayer] of this.otherPlayers) {
+                                if (!otherPlayer) {
+                                    continue;
+                                }
                                 if (this.checkBulletPlayerCollision(bullet, otherPlayer)) {
                                     this.handleBulletSelfDamage(bullet, otherPlayer);
-                                    // Send damage to other player via server
                                     this.sendPlayerDamage(playerId, bullet);
                                     ship.bullets.splice(i, 1);
                                     break;
@@ -3956,7 +4546,7 @@
                     }
 
                     // Check ship-wall collisions (ships are blocked)
-                    for (const ship of this.ships) {
+                    for (const ship of allShips) {
                         for (const wall of this.walls) {
                             wall.checkShipCollision(ship); // Ship blocked by wall
                         }
@@ -4006,6 +4596,7 @@
                         }, 3000);
                     }
 
+                    this.updateWarpBeacons();
                     this.updateHUD();
                     this.draw();
 

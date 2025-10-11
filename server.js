@@ -28,6 +28,7 @@ const PLAYFIELD_VERTICAL_MARGIN = 120;
 const PLAYFIELD_TOP = PLAYFIELD_VERTICAL_MARGIN;
 const PLAYFIELD_BOTTOM = WORLD_HEIGHT - PLAYFIELD_VERTICAL_MARGIN;
 const DEFAULT_SHIP_MARGIN = 20;
+const WARP_BEACON_LIFETIME_MS = 180000;
 const SAFE_ZONE = {
     x: WORLD_WIDTH / 2,
     y: WORLD_HEIGHT / 2,
@@ -56,6 +57,29 @@ function clampShipPosition(x, y, margin = DEFAULT_SHIP_MARGIN) {
     return { x: clampedX, y: clampedY };
 }
 
+function sanitizeWarpBeacon(beacon) {
+    if (!beacon) {
+        return null;
+    }
+    const now = Date.now();
+    if (!Number.isFinite(beacon.x) || !Number.isFinite(beacon.y) || !Number.isFinite(beacon.expiresAt)) {
+        return null;
+    }
+    if (typeof beacon.id !== 'string') {
+        return null;
+    }
+    if (now > beacon.expiresAt) {
+        return null;
+    }
+    return {
+        id: beacon.id,
+        x: beacon.x,
+        y: beacon.y,
+        createdAt: Number.isFinite(beacon.createdAt) ? beacon.createdAt : now,
+        expiresAt: beacon.expiresAt
+    };
+}
+
 wss.on('connection', function connection(ws, req) {
     const playerId = Math.random().toString(36).substr(2, 9);
     players.set(playerId, {
@@ -66,7 +90,8 @@ wss.on('connection', function connection(ws, req) {
         bounty: 0,
         shipType: DEFAULT_SHIP_TYPE,
         energy: DEFAULT_MAX_ENERGY,
-        maxEnergy: DEFAULT_MAX_ENERGY
+        maxEnergy: DEFAULT_MAX_ENERGY,
+        warpBeacon: null
     });
 
     console.log(`Player ${playerId} connected from ${req.socket.remoteAddress}`);
@@ -80,7 +105,8 @@ wss.on('connection', function connection(ws, req) {
                 x: player.x,
                 y: player.y,
                 bounty: player.bounty || 0,
-                shipType: player.shipType || 1
+                shipType: player.shipType || 1,
+                warpBeacon: sanitizeWarpBeacon(player.warpBeacon)
             });
         }
     });
@@ -91,6 +117,7 @@ wss.on('connection', function connection(ws, req) {
         players: existingPlayers,
         safeZone: SAFE_ZONE,
         world: { width: WORLD_WIDTH, height: WORLD_HEIGHT },
+        selfWarpBeacon: sanitizeWarpBeacon(players.get(playerId).warpBeacon),
         shipSelectionEnabled: SHIP_SELECTION_ENABLED
     }));
 
@@ -278,6 +305,133 @@ wss.on('connection', function connection(ws, req) {
                         playerEntry.ws.send(JSON.stringify(warpData));
                     }
                 });
+            } else if (message.type === 'warpSet') {
+                const player = players.get(playerId);
+                if (!player) {
+                    return;
+                }
+
+                const rawX = Number(message.x);
+                const rawY = Number(message.y);
+                if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'warpSetFailed',
+                            playerId,
+                            reason: 'invalid'
+                        }));
+                    }
+                    return;
+                }
+
+                const clampedPos = clampShipPosition(rawX, rawY);
+                if (isInSafeZone(clampedPos.x, clampedPos.y)) {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'warpSetFailed',
+                            playerId,
+                            reason: 'safezone'
+                        }));
+                    }
+                    return;
+                }
+
+                const beaconId = typeof message.beaconId === 'string'
+                    ? message.beaconId
+                    : `warp_${Date.now().toString(36)}`;
+                const createdAt = Date.now();
+                player.warpBeacon = {
+                    id: beaconId,
+                    x: clampedPos.x,
+                    y: clampedPos.y,
+                    createdAt,
+                    expiresAt: createdAt + WARP_BEACON_LIFETIME_MS
+                };
+
+                const payload = {
+                    type: 'warpSet',
+                    playerId,
+                    beaconId,
+                    x: player.warpBeacon.x,
+                    y: player.warpBeacon.y,
+                    createdAt: player.warpBeacon.createdAt,
+                    expiresAt: player.warpBeacon.expiresAt
+                };
+
+                players.forEach((playerEntry) => {
+                    if (playerEntry.ws.readyState === WebSocket.OPEN) {
+                        playerEntry.ws.send(JSON.stringify(payload));
+                    }
+                });
+            } else if (message.type === 'warpActivate') {
+                const player = players.get(playerId);
+                if (!player || !player.warpBeacon) {
+                    return;
+                }
+
+                if (typeof message.beaconId === 'string' && message.beaconId !== player.warpBeacon.id) {
+                    return;
+                }
+
+                const now = Date.now();
+                if (now > player.warpBeacon.expiresAt) {
+                    const expiredPayload = {
+                        type: 'warpExpired',
+                        playerId,
+                        beaconId: player.warpBeacon.id
+                    };
+                    player.warpBeacon = null;
+                    players.forEach((playerEntry) => {
+                        if (playerEntry.ws.readyState === WebSocket.OPEN) {
+                            playerEntry.ws.send(JSON.stringify(expiredPayload));
+                        }
+                    });
+                    return;
+                }
+
+                const clampedPos = clampShipPosition(player.warpBeacon.x, player.warpBeacon.y);
+                player.x = clampedPos.x;
+                player.y = clampedPos.y;
+                const beaconId = player.warpBeacon.id;
+                player.warpBeacon = null;
+
+                const payload = {
+                    type: 'warpActivate',
+                    playerId,
+                    beaconId,
+                    x: clampedPos.x,
+                    y: clampedPos.y
+                };
+
+                players.forEach((playerEntry) => {
+                    if (playerEntry.ws.readyState === WebSocket.OPEN) {
+                        playerEntry.ws.send(JSON.stringify(payload));
+                    }
+                });
+            } else if (message.type === 'warpExpired') {
+                const player = players.get(playerId);
+                if (!player || !player.warpBeacon) {
+                    return;
+                }
+
+                if (typeof message.beaconId === 'string' && message.beaconId !== player.warpBeacon.id) {
+                    return;
+                }
+
+                const beaconId = player.warpBeacon.id;
+                player.warpBeacon = null;
+
+                const payload = {
+                    type: 'warpExpired',
+                    playerId,
+                    beaconId
+                };
+
+                players.forEach((playerEntry) => {
+                    if (playerEntry.ws.readyState === WebSocket.OPEN) {
+                        playerEntry.ws.send(JSON.stringify(payload));
+                    }
+                });
             } else if (message.type === 'mineDislodged') {
                 const bombId = typeof message.bombId === 'string' ? message.bombId : null;
                 if (!bombId) {
@@ -395,6 +549,15 @@ wss.on('connection', function connection(ws, req) {
                 if (player && victimBounty !== null) {
                     player.bounty = victimBounty;
                 }
+                let warpExpiredPayload = null;
+                if (player && player.warpBeacon) {
+                    warpExpiredPayload = {
+                        type: 'warpExpired',
+                        playerId,
+                        beaconId: player.warpBeacon.id
+                    };
+                    player.warpBeacon = null;
+                }
                 const killerPlayer = message.killerId ? players.get(message.killerId) : null;
                 if (killerPlayer && killerBounty !== null) {
                     killerPlayer.bounty = killerBounty;
@@ -411,6 +574,9 @@ wss.on('connection', function connection(ws, req) {
                 players.forEach((player) => {
                     if (player.ws.readyState === WebSocket.OPEN) {
                         player.ws.send(JSON.stringify(deathData));
+                        if (warpExpiredPayload) {
+                            player.ws.send(JSON.stringify(warpExpiredPayload));
+                        }
                     }
                 });
             }
@@ -421,6 +587,15 @@ wss.on('connection', function connection(ws, req) {
 
     ws.on('close', function() {
         console.log(`Player ${playerId} disconnected`);
+        const departing = players.get(playerId);
+        let warpExpiredPayload = null;
+        if (departing && departing.warpBeacon) {
+            warpExpiredPayload = {
+                type: 'warpExpired',
+                playerId,
+                beaconId: departing.warpBeacon.id
+            };
+        }
         players.delete(playerId);
 
         // Notify other players
@@ -432,15 +607,53 @@ wss.on('connection', function connection(ws, req) {
         players.forEach((player) => {
             if (player.ws.readyState === WebSocket.OPEN) {
                 player.ws.send(JSON.stringify(disconnectData));
+                if (warpExpiredPayload) {
+                    player.ws.send(JSON.stringify(warpExpiredPayload));
+                }
             }
         });
     });
 
     ws.on('error', function(error) {
         console.error(`WebSocket error for player ${playerId}:`, error);
+        const erroredPlayer = players.get(playerId);
+        let warpExpiredPayload = null;
+        if (erroredPlayer && erroredPlayer.warpBeacon) {
+            warpExpiredPayload = {
+                type: 'warpExpired',
+                playerId,
+                beaconId: erroredPlayer.warpBeacon.id
+            };
+        }
         players.delete(playerId);
+        if (warpExpiredPayload) {
+            players.forEach((player) => {
+                if (player.ws.readyState === WebSocket.OPEN) {
+                    player.ws.send(JSON.stringify(warpExpiredPayload));
+                }
+            });
+        }
     });
 });
+
+setInterval(() => {
+    const now = Date.now();
+    players.forEach((player) => {
+        if (player.warpBeacon && now > player.warpBeacon.expiresAt) {
+            const payload = {
+                type: 'warpExpired',
+                playerId: player.id,
+                beaconId: player.warpBeacon.id
+            };
+            player.warpBeacon = null;
+            players.forEach((recipient) => {
+                if (recipient.ws.readyState === WebSocket.OPEN) {
+                    recipient.ws.send(JSON.stringify(payload));
+                }
+            });
+        }
+    });
+}, 1000);
 
 const PORT = 8443;
 server.listen(PORT, '0.0.0.0', () => {
