@@ -876,7 +876,9 @@
                     if (window.game.isMultiplayer) {
                         window.game.sendMultiplayerMessage({
                             type: 'wall',
-                            bricks: wall.bricks.map(brick => ({ x: brick.x, y: brick.y }))
+                            x: this.pos.x,
+                            y: this.pos.y,
+                            angle: this.angle
                         });
                     }
                 }
@@ -1608,14 +1610,21 @@
                 this.maxLifetime = this.lifetime;
 
                 const wallAngle = Number.isFinite(angle) ? angle : 0;
+
+                // Calculate position BEHIND the ship
+                const behindDistance = 60; // Distance behind the ship
+                const behindX = x - Math.cos(wallAngle) * behindDistance;
+                const behindY = y - Math.sin(wallAngle) * behindDistance;
+
                 const lateralX = Math.cos(wallAngle);
                 const lateralY = Math.sin(wallAngle);
 
+                // Create bricks starting from behind position
                 for (let i = 0; i < this.brickCount; i++) {
                     const offset = (i + 1) * this.brickSize;
                     this.bricks.push({
-                        x: x + lateralX * offset,
-                        y: y + lateralY * offset
+                        x: behindX + lateralX * offset,
+                        y: behindY + lateralY * offset
                     });
                 }
             }
@@ -2273,6 +2282,18 @@
                             }, { announce: false });
                             this.updateHUD();
                         }
+                        // Load existing walls from server
+                        if (Array.isArray(data.walls)) {
+                            data.walls.forEach(wallData => {
+                                const wallX = Number(wallData.x);
+                                const wallY = Number(wallData.y);
+                                const wallAngle = Number(wallData.angle);
+                                if (Number.isFinite(wallX) && Number.isFinite(wallY) && Number.isFinite(wallAngle)) {
+                                    const wall = new Wall(wallX, wallY, wallAngle);
+                                    this.walls.push(wall);
+                                }
+                            });
+                        }
                         this.updateLocalBounty(true);
                         this.broadcastPlayerState(true);
                         break;
@@ -2444,10 +2465,13 @@
                     }
 
                     case 'wall':
-                        if (data.playerId !== this.playerId) {
-                            data.bricks.forEach(brick => {
-                                this.walls.push(new Wall(brick.x, brick.y));
-                            });
+                        // Reconstruct wall from x, y, angle
+                        const wallX = Number(data.x);
+                        const wallY = Number(data.y);
+                        const wallAngle = Number(data.angle);
+                        if (Number.isFinite(wallX) && Number.isFinite(wallY) && Number.isFinite(wallAngle)) {
+                            const wall = new Wall(wallX, wallY, wallAngle);
+                            this.walls.push(wall);
                         }
                         break;
 

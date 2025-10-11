@@ -19,6 +19,7 @@ app.use(express.static(__dirname));
 
 const wss = new WebSocket.Server({ server });
 const players = new Map();
+const walls = []; // Track all active walls
 const SHIP_SELECTION_ENABLED = true;
 const DEFAULT_SHIP_TYPE = 1;
 const WORLD_WIDTH = 8000;
@@ -118,7 +119,8 @@ wss.on('connection', function connection(ws, req) {
         safeZone: SAFE_ZONE,
         world: { width: WORLD_WIDTH, height: WORLD_HEIGHT },
         selfWarpBeacon: sanitizeWarpBeacon(players.get(playerId).warpBeacon),
-        shipSelectionEnabled: SHIP_SELECTION_ENABLED
+        shipSelectionEnabled: SHIP_SELECTION_ENABLED,
+        walls: walls
     }));
 
     // Notify other players about new player
@@ -536,6 +538,32 @@ wss.on('connection', function connection(ws, req) {
                     players.forEach((p, id) => {
                         if (id !== playerId && p.ws.readyState === WebSocket.OPEN) {
                             p.ws.send(JSON.stringify(changeData));
+                        }
+                    });
+                }
+            } else if (message.type === 'wall') {
+                // Store and broadcast wall deployment
+                if (Number.isFinite(message.x) && Number.isFinite(message.y) && Number.isFinite(message.angle)) {
+                    const wallData = {
+                        type: 'wall',
+                        playerId,
+                        x: Number(message.x),
+                        y: Number(message.y),
+                        angle: Number(message.angle)
+                    };
+
+                    walls.push({
+                        playerId,
+                        x: wallData.x,
+                        y: wallData.y,
+                        angle: wallData.angle,
+                        createdAt: Date.now()
+                    });
+
+                    // Broadcast to all players
+                    players.forEach((player) => {
+                        if (player.ws.readyState === WebSocket.OPEN) {
+                            player.ws.send(JSON.stringify(wallData));
                         }
                     });
                 }
