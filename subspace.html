@@ -179,6 +179,7 @@
             <div>Shield: <span id="shieldStatus">Inactive</span></div>
             <div>Bounty: <span id="powerUps">0</span></div>
             <div>Walls: <span id="wallCount">0</span></div>
+            <div>Burst: <span id="burstCount">0</span></div>
             <div>Warp: <span id="warpStatus">None</span></div>
             <div>Deaths: <span id="deaths">0</span></div>
             <div style="margin-top: 10px; border-top: 1px solid #0ff; padding-top: 5px;">
@@ -207,7 +208,7 @@
             <div>CTRL - Fire Bullets</div>
             <div>TAB - Fire Bombs</div>
             <div>F2 - Deploy Wall</div>
-            <div>F3 - Burst Push</div>
+            <div>F3 - Burst Push (Requires pickup, max 3)</div>
             <div>SHIFT+1 - Deploy Warp Beacon</div>
             <div>1 - Warp to Beacon</div>
             <div>SPACE - Brake</div>
@@ -288,6 +289,7 @@
                 <label><input type="checkbox" class="powerup-checkbox" value="wall"> Wall</label>
                 <label><input type="checkbox" class="powerup-checkbox" value="warp"> Warp</label>
                 <label><input type="checkbox" class="powerup-checkbox" value="bouncing"> Bouncing</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="repel"> Repel</label>
             </div>
 
             <div class="config-slider" style="margin-top: 10px;">
@@ -495,6 +497,7 @@
                 this.gunTimeout = 0;
                 this.burstTimeout = 0;
                 this.burstTimeoutDefault = 2.0; // Burst cooldown is 2 seconds
+                this.burstCount = 0; // Number of burst repels available (power-up pickup)
                 this.energyRecharge = 50; // Energy recharge rate per second
 
                 this.size = 18; // Reasonable triangle size
@@ -591,6 +594,7 @@
                 this.rotationLevel = clampValue(this.rotationLevel, 0, UPGRADE_LIMITS.rotationLevel);
                 this.wallCount = clampValue(this.wallCount, 0, UPGRADE_LIMITS.wallCount);
                 this.warpCount = clampValue(this.warpCount, 0, UPGRADE_LIMITS.warpCount);
+                this.burstCount = clampValue(this.burstCount, 0, 3);
             }
 
             resetUpgrades() {
@@ -603,6 +607,7 @@
                 this.rotationLevel = 0;
                 this.wallCount = 0;
                 this.warpCount = 0;
+                this.burstCount = 0;
                 this.updateStatsFromLevels();
             }
 
@@ -722,8 +727,8 @@
                     this.deployWall();
                 }
 
-                // Burst - pushes everything away
-                if (input.burst && this.burstTimeout <= 0 && this.energy >= this.getBurstEnergy()) {
+                // Burst - pushes everything away (requires burst pickups)
+                if (input.burst && this.burstTimeout <= 0 && this.burstCount > 0) {
                     this.burst();
                 }
             }
@@ -892,14 +897,9 @@
                 }
             }
 
-            getBurstEnergy() {
-                // Burst costs 250 energy
-                return 250;
-            }
-
             burst() {
-                const burstEnergy = this.getBurstEnergy();
-                this.energy -= burstEnergy;
+                // Burst no longer costs energy, uses pickup count instead
+                this.burstCount--;
                 this.burstTimeout = this.burstTimeoutDefault;
 
                 if (window.game) {
@@ -1154,6 +1154,13 @@
                         effect: 'bouncing',
                         name: 'BOUNCING BULLETS',
                         message: 'Bullets bounce off walls!'
+                    },
+                    repel: {
+                        spriteIndex: 9,
+                        color: '#ff00ff',
+                        effect: 'repel',
+                        name: 'BURST REPEL',
+                        message: 'Push everything away (Max 3)!'
                     }
                 };
 
@@ -1287,6 +1294,12 @@
                         // Enable bouncing bullets (permanent, one-time toggle)
                         if (!ship.bulletBounce) {
                             ship.bulletBounce = true;
+                        }
+                        break;
+                    case 'repel':
+                        // Add burst repel to inventory (limited use, max 3)
+                        if (ship.burstCount < 3) {
+                            ship.burstCount++;
                         }
                         break;
                 }
@@ -3259,7 +3272,7 @@
             }
 
             spawnInitialPowerUps() {
-                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp', 'bouncing'];
+                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp', 'bouncing', 'repel'];
 
                 // Spawn 6 initial power-ups (100% increase from 3)
                 for (let i = 0; i < 6; i++) {
@@ -3273,7 +3286,7 @@
             }
 
             spawnPowerUp() {
-                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp', 'bouncing'];
+                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp', 'bouncing', 'repel'];
                 const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
                 console.log(`Spawning power-up: ${type}`); // Debug log
 
@@ -3747,6 +3760,7 @@
                 }
                 document.getElementById('powerUps').textContent = this.powerUpsCollected;
                 document.getElementById('wallCount').textContent = formatLevelDisplay(ship.wallCount, UPGRADE_LIMITS.wallCount);
+                document.getElementById('burstCount').textContent = `${ship.burstCount}/3`;
                 const warpStatusEl = document.getElementById('warpStatus');
                 if (warpStatusEl) {
                     const now = this.getNow();
