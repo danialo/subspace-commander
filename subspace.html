@@ -1618,15 +1618,25 @@
                 this.maxLifetime = this.lifetime;
 
                 const wallAngle = Number.isFinite(angle) ? angle : 0;
+
+                // Position wall BEHIND the ship
+                // Ship forward direction: sin(angle) for X, -cos(angle) for Y
+                // So backward is: -sin(angle) for X, +cos(angle) for Y
+                const behindDistance = 60;
+                const behindX = x + -Math.sin(wallAngle) * behindDistance;
+                const behindY = y + Math.cos(wallAngle) * behindDistance;
+
+                // Wall extends PERPENDICULAR (90 degrees) to ship direction
+                // Using original cos/sin gives perpendicular orientation
                 const lateralX = Math.cos(wallAngle);
                 const lateralY = Math.sin(wallAngle);
 
-                // Create bricks extending BACKWARDS from ship position
+                // Create bricks centered on the behind position (extending equally in both directions)
                 for (let i = 0; i < this.brickCount; i++) {
-                    const offset = (i + 1) * this.brickSize;
+                    const offset = (i - this.brickCount / 2 + 0.5) * this.brickSize;
                     this.bricks.push({
-                        x: x - lateralX * offset,
-                        y: y - lateralY * offset
+                        x: behindX + lateralX * offset,
+                        y: behindY + lateralY * offset
                     });
                 }
             }
@@ -1646,6 +1656,12 @@
                     const distance = Math.sqrt(dx * dx + dy * dy);
 
                     if (distance < this.brickSize / 2 + bullet.size / 2) {
+                        // Check if bullet can bounce
+                        if (!bullet.canBounce) {
+                            return true; // Destroy bullet
+                        }
+
+                        // Bullet can bounce, so bounce it
                         const angle = Math.atan2(dy, dx);
                         const speed = Math.sqrt(bullet.vel.x * bullet.vel.x + bullet.vel.y * bullet.vel.y);
                         bullet.vel.x = Math.cos(angle) * speed;
@@ -1671,6 +1687,12 @@
                     const distance = Math.sqrt(dx * dx + dy * dy);
 
                     if (distance < this.brickSize / 2 + bomb.size) {
+                        // Check if bomb has already bounced once
+                        if (bomb.wallBounceCount >= 1) {
+                            return true; // Destroy bomb (already bounced once)
+                        }
+
+                        // First bounce - allow it
                         const angle = Math.atan2(dy, dx);
                         const speed = Math.sqrt(bomb.vel.x * bomb.vel.x + bomb.vel.y * bomb.vel.y);
                         bomb.vel.x = Math.cos(angle) * speed;
@@ -1680,7 +1702,7 @@
                         bomb.pos.y = brick.y + Math.sin(angle) * (this.brickSize / 2 + bomb.size + 5);
 
                         bomb.wallBounceCount = (bomb.wallBounceCount || 0) + 1;
-                        return true;
+                        return false; // Keep bomb after first bounce
                     }
                 }
                 return false;
@@ -3432,14 +3454,11 @@
                 }
 
                 if (playerId === this.playerId) {
-                    this.clearLocalOrdnance();
                     this.lastBroadcastState.time = 0;
                     this.lastBroadcastState.x = ship.pos.x;
                     this.lastBroadcastState.y = ship.pos.y;
                     this.lastBroadcastState.rotation = ship.angle;
                     this.broadcastPlayerState(true);
-                } else {
-                    this.clearOrdnanceForPlayer(playerId);
                 }
             }
 
@@ -3685,14 +3704,11 @@
                 }
 
                 if (playerId === this.playerId) {
-                    this.clearLocalOrdnance();
                     this.lastBroadcastState.time = 0;
                     this.lastBroadcastState.x = ship.pos.x;
                     this.lastBroadcastState.y = ship.pos.y;
                     this.lastBroadcastState.rotation = ship.angle;
                     this.broadcastPlayerState(true);
-                } else {
-                    this.clearOrdnanceForPlayer(playerId);
                 }
             }
 
@@ -4559,11 +4575,18 @@
                         }
                     }
 
-                    // Check bomb-wall collisions (bombs bounce)
-                    for (const bomb of this.bombs) {
+                    // Check bomb-wall collisions (bombs bounce once, then destroy)
+                    for (let i = this.bombs.length - 1; i >= 0; i--) {
+                        const bomb = this.bombs[i];
+                        let bombDestroyed = false;
                         for (const wall of this.walls) {
-                            wall.checkBombCollision(bomb); // Bomb bounces, wall might be damaged
+                            if (wall.checkBombCollision(bomb)) {
+                                this.bombs.splice(i, 1);
+                                bombDestroyed = true;
+                                break; // Bomb destroyed, check next bomb
+                            }
                         }
+                        if (bombDestroyed) continue;
                     }
 
                     // Check bomb proximity to players
