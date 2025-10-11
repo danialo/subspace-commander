@@ -647,6 +647,9 @@
                 // Get ship-specific configuration
                 const config = window.shipConfig.getConfig(this.shipType);
 
+                // Check if in safe zone - block all offensive actions
+                const inSafeZone = window.game && window.game.isInSafeZone && window.game.isInSafeZone(this.pos.x, this.pos.y);
+
                 // Rotation (much smoother, continuous) - now configurable with upgrades
                 // Base speed reduced by 50% so max upgraded speed equals original base speed
                 const baseRotationSpeed = 1.5 * config.turnRateMultiplier; // Reduced from 3.0 to 1.5
@@ -687,11 +690,16 @@
                     this.vel.addPolar(-thrustDelta * 0.5, this.angle);
                 }
 
-                // Brake
+                // Brake (ALWAYS allowed, even in safe zone)
                 if (input.brake) {
                     const brakeFactor = typeof context.brakeFactor === 'number' ? context.brakeFactor : 0.95;
                     const clampedFactor = Math.max(0, Math.min(1, brakeFactor));
                     this.vel.scale(clampedFactor);
+                }
+
+                // BLOCK ALL OFFENSIVE ACTIONS IN SAFE ZONE
+                if (inSafeZone) {
+                    return;
                 }
 
                 // Firing bullets
