@@ -2026,7 +2026,10 @@
                     game.warpBeacons.forEach((beacon, ownerId) => {
                         if (beacon && !beacon.isExpired(now)) {
                             const isLocal = ownerId === (game.playerId || 'local');
-                            this.drawWarpBeacon(beacon, isLocal);
+                            // Only show local player's warp beacon on minimap
+                            if (isLocal) {
+                                this.drawWarpBeacon(beacon, isLocal);
+                            }
                         }
                     });
                 }
@@ -3829,8 +3832,10 @@
                 this.drawSafeZone();
 
                 const warpRenderTime = this.getNow();
-                for (const beacon of this.warpBeacons.values()) {
-                    if (beacon && !beacon.isExpired(warpRenderTime) && this.viewport.isVisible(beacon)) {
+                for (const [ownerId, beacon] of this.warpBeacons.entries()) {
+                    const isLocal = ownerId === this.getLocalPlayerId();
+                    // Only render local player's warp beacon in game world
+                    if (isLocal && beacon && !beacon.isExpired(warpRenderTime) && this.viewport.isVisible(beacon)) {
                         beacon.draw(this.ctx, this.viewport, warpRenderTime);
                     }
                 }
