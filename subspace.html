@@ -1605,14 +1605,14 @@
                 this.angle = angle;
                 this.bricks = [];
                 this.brickSize = 20;
-                this.brickCount = 6;
+                this.brickCount = 10;
                 this.lifetime = 300; // Wall lasts roughly five minutes
                 this.maxLifetime = this.lifetime;
 
                 const wallAngle = Number.isFinite(angle) ? angle : 0;
 
                 // Calculate position BEHIND the ship
-                const behindDistance = 60; // Distance behind the ship
+                const behindDistance = 100; // Distance behind the ship
                 const behindX = x - Math.cos(wallAngle) * behindDistance;
                 const behindY = y - Math.sin(wallAngle) * behindDistance;
 
