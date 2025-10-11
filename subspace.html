@@ -236,13 +236,17 @@
             </div>
 
             <div class="config-slider">
-                <label>Weapon Level <span class="value" id="weaponLevelValue">0</span></label>
-                <input type="range" id="weaponLevelSlider" min="0" max="5" step="1" value="0">
+                <label>Weapon Level <span class="value" id="weaponLevelValue">0</span> (Red/Yellow/Green)</label>
+                <input type="range" id="weaponLevelSlider" min="0" max="2" step="1" value="0">
+            </div>
+
+            <div class="config-slider">
+                <label><input type="checkbox" id="bulletBounceCheckbox"> Bullet Bouncing</label>
             </div>
 
             <div class="config-slider">
                 <label>Recharge Level <span class="value" id="rechargeLevelValue">0</span></label>
-                <input type="range" id="rechargeLevelSlider" min="0" max="10" step="1" value="0">
+                <input type="range" id="rechargeLevelSlider" min="0" max="5" step="1" value="0">
             </div>
 
             <div class="config-slider">
@@ -283,6 +287,7 @@
                 <label><input type="checkbox" class="powerup-checkbox" value="rotation"> Rotation</label>
                 <label><input type="checkbox" class="powerup-checkbox" value="wall"> Wall</label>
                 <label><input type="checkbox" class="powerup-checkbox" value="warp"> Warp</label>
+                <label><input type="checkbox" class="powerup-checkbox" value="bouncing"> Bouncing</label>
             </div>
 
             <div class="config-slider" style="margin-top: 10px;">
@@ -306,8 +311,8 @@
         const UPGRADE_LIMITS = Object.freeze({
             energyLevel: 5,
             maxSpeedLevel: 10,
-            weaponLevel: 5,
-            rechargeLevel: 10,
+            weaponLevel: 2,  // 3 levels: 0=Red, 1=Yellow, 2=Green
+            rechargeLevel: 5,  // Reduced from 10 to 5 for less grindy progression
             thrustLevel: 10,
             rotationLevel: 3,
             wallCount: 10,
@@ -348,7 +353,7 @@
                         energyCapacityMultiplier: 1.0,
                         bulletDamageMultiplier: 1.0,
                         energyRechargeMultiplier: 1.0,
-                        gunTimeoutMultiplier: 0.7 // 30% faster firing (shorter timeout)
+                        gunTimeoutMultiplier: 0.45 // Faster firing rate
                     },
                     // Future ship configs will go here
                     2: { name: 'Javelin', baseSpeedMultiplier: 1.0, thrustMultiplier: 1.0, turnRateMultiplier: 1.0, energyCapacityMultiplier: 1.0, bulletDamageMultiplier: 1.0, energyRechargeMultiplier: 1.0, gunTimeoutMultiplier: 1.0 },
@@ -506,6 +511,7 @@
                 // Permanent upgrade levels (reset on death)
                 this.maxSpeedLevel = 0; // +50 max speed per level
                 this.weaponLevel = 0; // Bullet progression: 0=red, 1=yellow, 2=green
+                this.bulletBounce = false; // Bullet bouncing enabled/disabled
                 this.rechargeLevel = 0; // +200% recharge rate per level
                 this.thrustLevel = 0; // +2% thrust per level
                 this.energyLevel = 0; // +200 max energy per level
@@ -554,10 +560,13 @@
                 this.maxSpeed = baseMaxSpeed + (this.maxSpeedLevel * 5 * config.baseSpeedMultiplier);
                 this.maxEnergy = baseMaxEnergy + (this.energyLevel * 200 * config.energyCapacityMultiplier);
 
-                // Fire energy costs scale with weapon level (6 levels)
-                const baseBulletCost = 67;
-                const energyCosts = [67, 75, 90, 100, 120, 140]; // Energy cost per level
-                this.fireEnergy = energyCosts[Math.min(this.weaponLevel, 5)] || baseBulletCost;
+                // Fire energy costs scale with weapon level (3 levels: Red, Yellow, Green)
+                // Tuned to allow ~60 bullets at max level (no recharge while firing)
+                // Working backward: 2100 energy / 60 bullets = 35 energy per green bullet
+                const baseBulletCost = 15;
+                const energyCosts = [15, 25, 35]; // Energy cost per level
+                this.fireEnergy = energyCosts[Math.min(this.weaponLevel, 2)] || baseBulletCost;
+                // Recharge scaling: +100% per level (max 5 levels = 6x base recharge)
                 this.energyRecharge = baseEnergyRecharge * (1 + this.rechargeLevel * 1.0);
                 this.baseEnergyRecharge = baseEnergyRecharge;
                 const energyUseMultiplier = this.boostEnergyUseMultiplier || 3.0;
@@ -565,9 +574,9 @@
                 this.thrustMultiplier = baseThrustMultiplier * (1 + this.thrustLevel * 0.02); // +2% per level - ORIGINAL VALUE
                 this.gunTimeoutDefault = baseGunTimeout * (config.gunTimeoutMultiplier || 1.0);
 
-                // Determine bullet type name for HUD display (6 levels)
-                const bulletNames = ['Red', 'Red+', 'Yellow', 'Yellow+', 'Green', 'Green+'];
-                this.bulletType = bulletNames[Math.min(this.weaponLevel, 5)] || 'Red';
+                // Determine bullet type name for HUD display (3 levels)
+                const bulletNames = ['Red', 'Yellow', 'Green'];
+                this.bulletType = bulletNames[Math.min(this.weaponLevel, 2)] || 'Red';
 
                 // Debug log for bullet level changes
                 console.log(`Weapon Level: ${this.weaponLevel}, Bullet Type: ${this.bulletType}`);
@@ -686,6 +695,7 @@
                 }
 
                 // Firing bullets
+                this.isFiring = input.fire; // Track if fire button is held
                 if (input.fire && this.gunTimeout <= 0 && this.energy >= this.fireEnergy) {
                     this.fire();
                 }
@@ -716,7 +726,7 @@
                     return;
                 }
 
-                this.energy -= this.fireEnergy;
+                this.energy = Math.max(1, this.energy - this.fireEnergy); // Never go below 1
                 this.gunTimeout = this.gunTimeoutDefault;
 
                 // Create bullet with ship velocity + bullet velocity
@@ -726,8 +736,9 @@
                     this.pos.y + -Math.cos(this.angle) * this.size,
                     this.vel.x + Math.sin(this.angle) * 600, // Bullet speed
                     this.vel.y + -Math.cos(this.angle) * 600,
-                    this.weaponLevel, // Pass weapon level directly (0-5)
-                    ownerId
+                    this.weaponLevel, // Pass weapon level directly (0-2)
+                    ownerId,
+                    this.bulletBounce // Pass bounce property from ship
                 );
 
                 this.bullets.push(bullet);
@@ -741,7 +752,8 @@
                         y: bullet.pos.y,
                         vx: bullet.vel.x,
                         vy: bullet.vel.y,
-                        weaponLevel: this.weaponLevel
+                        weaponLevel: this.weaponLevel,
+                        canBounce: this.bulletBounce
                     });
                 }
             }
@@ -758,7 +770,7 @@
                 }
 
                 const bombEnergy = this.getBombEnergy();
-                this.energy -= bombEnergy;
+                this.energy = Math.max(1, this.energy - bombEnergy); // Never go below 1
                 this.gunTimeout = this.gunTimeoutDefault * 2; // Longer timeout for bombs
 
                 // Create bomb with ship velocity + bomb velocity
@@ -815,7 +827,7 @@
                     return;
                 }
 
-                this.energy -= mineEnergy;
+                this.energy = Math.max(1, this.energy - mineEnergy); // Never go below 1
                 this.gunTimeout = this.gunTimeoutDefault * 2;
                 const mineId = window.game.generateEntityId('mine');
                 const createdAt = Date.now();
@@ -911,7 +923,8 @@
                 }
 
                 // Energy recharge (based on current upgrade level)
-                if (this.energy < this.maxEnergy) {
+                // Only recharge when NOT holding fire button
+                if (this.energy < this.maxEnergy && !this.isFiring) {
                     this.energy = Math.min(this.maxEnergy, this.energy + this.energyRecharge * deltaTime);
                 }
 
@@ -919,8 +932,8 @@
                 if (this.boostActive && this.boostEnergyDrainPerSecond > 0) {
                     const boostCost = this.boostEnergyDrainPerSecond * deltaTime;
                     if (boostCost > 0) {
-                        this.energy = Math.max(0, this.energy - boostCost);
-                        if (this.energy <= 0) {
+                        this.energy = Math.max(1, this.energy - boostCost); // Never go below 1
+                        if (this.energy <= 1) {
                             this.boostActive = false;
                         }
                     }
@@ -968,7 +981,8 @@
                     console.log(`Ship clamped: (${oldX.toFixed(1)}, ${oldY.toFixed(1)}) -> (${this.pos.x.toFixed(1)}, ${this.pos.y.toFixed(1)})`);
                 }
 
-                // Check for death conditions (only energy-based now, position is clamped)
+                // Check for death conditions
+                // Energy reaching 0 triggers death, but only damage can bring energy to 0
                 if (this.energy <= 0) {
                     this.die();
                     return; // Early exit to prevent further updates
@@ -1123,6 +1137,13 @@
                         effect: 'warp',
                         name: 'WARP DEVICE',
                         message: 'Drop a warp beacon (Shift+1)!'
+                    },
+                    bouncing: {
+                        spriteIndex: 7,  // TODO: needs unique sprite (currently shares with rotation)
+                        color: '#00ffff',
+                        effect: 'bouncing',
+                        name: 'BOUNCING BULLETS',
+                        message: 'Bullets bounce off walls!'
                     }
                 };
 
@@ -1252,42 +1273,42 @@
                             ship.updateStatsFromLevels();
                         }
                         break;
+                    case 'bouncing':
+                        // Enable bouncing bullets (permanent, one-time toggle)
+                        if (!ship.bulletBounce) {
+                            ship.bulletBounce = true;
+                        }
+                        break;
                 }
             }
         }
 
         // Bullet class
         class Bullet {
-            constructor(x, y, vx, vy, weaponLevel = 0, ownerId = null) {
+            constructor(x, y, vx, vy, weaponLevel = 0, ownerId = null, canBounce = false) {
                 this.pos = new Vector2D(x, y);
                 this.vel = new Vector2D(vx, vy);
                 this.weaponLevel = weaponLevel;
-                this.upgradeLevel = weaponLevel; // Track specific upgrade level (0-5)
+                this.upgradeLevel = weaponLevel; // Track specific upgrade level (0-2)
                 this.bounceCount = 0;
                 this.hasHitWall = false;
                 this.ownerId = ownerId;
+                this.canBounce = canBounce;
 
-                // 6-level bullet progression system
+                // 3-level bullet progression system (Red, Yellow, Green)
                 const bulletConfigs = [
-                    // Level 0: Basic Red
-                    { color: '#ff4444', damage: 110, lifetime: 6.0, canBounce: false, name: 'Red' },
-                    // Level 1: Red with Border (bouncing)
-                    { color: '#ff4444', damage: 120, lifetime: 7.0, canBounce: true, name: 'Red+' },
-                    // Level 2: Basic Yellow
-                    { color: '#ffff44', damage: 130, lifetime: 9.0, canBounce: false, name: 'Yellow' },
-                    // Level 3: Yellow with Border
-                    { color: '#ffff44', damage: 140, lifetime: 11.0, canBounce: false, name: 'Yellow+' },
-                    // Level 4: Basic Green
-                    { color: '#44ff44', damage: 150, lifetime: 15.0, canBounce: false, name: 'Green' },
-                    // Level 5: Green with Border (bouncing)
-                    { color: '#44ff44', damage: 160, lifetime: 18.0, canBounce: true, name: 'Green+' }
+                    // Level 0: Red
+                    { color: '#ff4444', damage: 110, lifetime: 6.0, name: 'Red' },
+                    // Level 1: Yellow
+                    { color: '#ffff44', damage: 130, lifetime: 9.0, name: 'Yellow' },
+                    // Level 2: Green
+                    { color: '#44ff44', damage: 150, lifetime: 15.0, name: 'Green' }
                 ];
 
-                const config = bulletConfigs[Math.min(weaponLevel, 5)] || bulletConfigs[0];
+                const config = bulletConfigs[Math.min(weaponLevel, 2)] || bulletConfigs[0];
                 this.color = config.color;
                 this.lifetime = config.lifetime;
                 this.maxLifetime = this.lifetime;
-                this.canBounce = config.canBounce;
                 this.bulletName = config.name;
                 this.maxBounces = 1;
                 this.size = 4; // Bullet collision size
@@ -1345,73 +1366,58 @@
                 ctx.save();
                 ctx.globalAlpha = alpha;
 
-                // Draw bullet based on upgrade level (30% smaller)
+                // Draw bullet based on upgrade level and bounce capability (3-level system)
                 switch(this.upgradeLevel) {
-                    case 0: // Level 0: Basic Red Circle
+                    case 0: // Level 0: Red
                         ctx.fillStyle = this.color;
                         ctx.beginPath();
                         ctx.arc(screenPos.x, screenPos.y, 2.1, 0, Math.PI * 2); // 3 * 0.7 = 2.1
                         ctx.fill();
+                        // Add white border if bouncing enabled
+                        if (this.canBounce) {
+                            ctx.strokeStyle = '#ffffff';
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            ctx.arc(screenPos.x, screenPos.y, 2.8, 0, Math.PI * 2); // 4 * 0.7 = 2.8
+                            ctx.stroke();
+                        }
                         break;
 
-                    case 1: // Level 1: Red Circle with White Border (bouncing)
-                        ctx.fillStyle = this.color;
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 2.1, 0, Math.PI * 2); // 3 * 0.7 = 2.1
-                        ctx.fill();
-                        // White border to show upgrade
-                        ctx.strokeStyle = '#ffffff';
-                        ctx.lineWidth = 1;
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 2.8, 0, Math.PI * 2); // 4 * 0.7 = 2.8
-                        ctx.stroke();
-                        break;
-
-                    case 2: // Level 2: Basic Yellow Circle
+                    case 1: // Level 1: Yellow
                         ctx.fillStyle = this.color;
                         ctx.beginPath();
                         ctx.arc(screenPos.x, screenPos.y, 2.8, 0, Math.PI * 2); // 4 * 0.7 = 2.8
                         ctx.fill();
+                        // Add orange border if bouncing enabled
+                        if (this.canBounce) {
+                            ctx.strokeStyle = '#ff8800';
+                            ctx.lineWidth = 1.4; // 2 * 0.7 = 1.4
+                            ctx.beginPath();
+                            ctx.arc(screenPos.x, screenPos.y, 3.5, 0, Math.PI * 2); // 5 * 0.7 = 3.5
+                            ctx.stroke();
+                        }
                         break;
 
-                    case 3: // Level 3: Yellow Circle with Orange Border
-                        ctx.fillStyle = this.color;
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 2.8, 0, Math.PI * 2); // 4 * 0.7 = 2.8
-                        ctx.fill();
-                        // Orange border for upgrade
-                        ctx.strokeStyle = '#ff8800';
-                        ctx.lineWidth = 1.4; // 2 * 0.7 = 1.4
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 3.5, 0, Math.PI * 2); // 5 * 0.7 = 3.5
-                        ctx.stroke();
-                        break;
-
-                    case 4: // Level 4: Basic Green Circle
-                        ctx.fillStyle = this.color;
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 3.5, 0, Math.PI * 2); // 5 * 0.7 = 3.5
-                        ctx.fill();
-                        break;
-
-                    case 5: // Level 5: Green Circle with Cyan Border + Glow (bouncing)
-                        // Glow effect
-                        ctx.shadowColor = this.color;
-                        ctx.shadowBlur = 5.6; // 8 * 0.7 = 5.6
+                    case 2: // Level 2: Green
+                        // Glow effect if bouncing
+                        if (this.canBounce) {
+                            ctx.shadowColor = this.color;
+                            ctx.shadowBlur = 5.6; // 8 * 0.7 = 5.6
+                        }
                         ctx.fillStyle = this.color;
                         ctx.beginPath();
                         ctx.arc(screenPos.x, screenPos.y, 3.5, 0, Math.PI * 2); // 5 * 0.7 = 3.5
                         ctx.fill();
 
-                        // Reset shadow
-                        ctx.shadowBlur = 0;
-
-                        // Cyan border for max upgrade
-                        ctx.strokeStyle = '#00ffff';
-                        ctx.lineWidth = 1.4; // 2 * 0.7 = 1.4
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 4.2, 0, Math.PI * 2); // 6 * 0.7 = 4.2
-                        ctx.stroke();
+                        // Reset shadow and add cyan border if bouncing
+                        if (this.canBounce) {
+                            ctx.shadowBlur = 0;
+                            ctx.strokeStyle = '#00ffff';
+                            ctx.lineWidth = 1.4; // 2 * 0.7 = 1.4
+                            ctx.beginPath();
+                            ctx.arc(screenPos.x, screenPos.y, 4.2, 0, Math.PI * 2); // 6 * 0.7 = 4.2
+                            ctx.stroke();
+                        }
                         break;
                 }
 
@@ -2306,7 +2312,8 @@
                                 data.vx,
                                 data.vy,
                                 data.weaponLevel || 0,
-                                data.playerId
+                                data.playerId,
+                                data.canBounce || false
                             );
                             const ownerShip = this.otherPlayers.get(data.playerId);
                             if (ownerShip && Array.isArray(ownerShip.bullets)) {
@@ -2696,7 +2703,7 @@
             }
 
             damagePlayer(bulletLevel, attackerId = null) {
-                const damage = this.getBulletDamage(Math.min(Math.max(bulletLevel, 0), 5));
+                const damage = this.getBulletDamage(Math.min(Math.max(bulletLevel, 0), 2));
 
                 console.log(`Hit by level ${bulletLevel} bullet for ${damage} damage`);
                 this.applyDamageToPlayerShip(damage, {
@@ -2730,7 +2737,7 @@
             }
 
             getBulletDamage(level) {
-                const damageLevels = [110, 120, 130, 140, 150, 160];
+                const damageLevels = [110, 130, 150]; // 3 levels: Red, Yellow, Green
                 const clampedIndex = Math.max(0, Math.min(level, damageLevels.length - 1));
                 return damageLevels[clampedIndex];
             }
@@ -2965,8 +2972,9 @@
                         bomb.pos.y,
                         Math.cos(angle) * 400,
                         Math.sin(angle) * 400,
-                        Math.min(bomb.weaponLevel || 0, 5),
-                        bomb.ownerId || null
+                        Math.min(bomb.weaponLevel || 0, 2),
+                        bomb.ownerId || null,
+                        false // Shrapnel doesn't bounce
                     );
                     this.playerShip.bullets.push(shrapnel);
                 }
@@ -3059,7 +3067,8 @@
                         Math.cos(angle) * 400,
                         Math.sin(angle) * 400,
                         0,
-                        null
+                        null,
+                        false // Remote shrapnel doesn't bounce
                     );
                     this.playerShip.bullets.push(shrapnel);
                 }
@@ -3165,7 +3174,8 @@
                     recharge: [494, 988], // B4 to B5
                     thrust: [587, 1175], // D5 to D6
                     rotation: [698, 1397], // F5 to F6
-                    warp: [880, 660]
+                    warp: [880, 660],
+                    bouncing: [784, 1568] // G5 to G6
                 };
 
                 const freqs = frequencies[type] || frequencies.energy;
@@ -3193,7 +3203,7 @@
             }
 
             spawnInitialPowerUps() {
-                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp'];
+                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp', 'bouncing'];
 
                 // Spawn 6 initial power-ups (100% increase from 3)
                 for (let i = 0; i < 6; i++) {
@@ -3207,7 +3217,7 @@
             }
 
             spawnPowerUp() {
-                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp'];
+                const powerUpTypes = ['energy', 'speed', 'weapons', 'shield', 'recharge', 'thrust', 'rotation', 'wall', 'warp', 'bouncing'];
                 const type = powerUpTypes[Math.floor(Math.random() * powerUpTypes.length)];
                 console.log(`Spawning power-up: ${type}`); // Debug log
 
@@ -3710,17 +3720,12 @@
                 document.getElementById('maxSpeed').textContent = Math.floor(ship.maxSpeed);
                 document.getElementById('bulletType').textContent = ship.bulletType.charAt(0).toUpperCase() + ship.bulletType.slice(1);
 
-                // Show bullet bouncing status for 6-level system
-                let bounceText = '';
-                if (ship.weaponLevel === 1 || ship.weaponLevel === 5) {
-                    bounceText = '(Bouncing)';
-                } else {
-                    bounceText = '(No Bounce)';
-                }
+                // Show bullet bouncing status
+                const bounceText = ship.bulletBounce ? '(Bouncing)' : '(No Bounce)';
                 document.getElementById('bulletBounce').textContent = bounceText;
 
-                // Show bullet damage for 6-level system
-                const currentDamage = this.getBulletDamage(Math.min(Math.max(ship.weaponLevel, 0), 5));
+                // Show bullet damage for 3-level system
+                const currentDamage = this.getBulletDamage(Math.min(Math.max(ship.weaponLevel, 0), 2));
                 document.getElementById('bulletDamage').textContent = currentDamage;
                 document.getElementById('bombType').textContent = ship.bulletType.charAt(0).toUpperCase() + ship.bulletType.slice(1);
                 document.getElementById('rechargeLevel').textContent = formatLevelDisplay(ship.rechargeLevel, UPGRADE_LIMITS.rechargeLevel);
@@ -4297,6 +4302,16 @@
                 if (clearBtn) {
                     clearBtn.addEventListener('click', () => {
                         this.clearNearbyPowerUps();
+                    });
+                }
+
+                // Bullet bounce checkbox handler
+                const bulletBounceCheckbox = document.getElementById('bulletBounceCheckbox');
+                if (bulletBounceCheckbox) {
+                    bulletBounceCheckbox.checked = this.playerShip.bulletBounce;
+                    bulletBounceCheckbox.addEventListener('change', (e) => {
+                        this.playerShip.bulletBounce = e.target.checked;
+                        this.updateHUD();
                     });
                 }
 
