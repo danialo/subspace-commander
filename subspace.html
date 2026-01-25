@@ -2250,7 +2250,7 @@
                 statusEl.textContent = 'Connecting...';
                 btnEl.disabled = true;
 
-                this.ws = new WebSocket('wss://172.233.149.241:8443');
+                this.ws = new WebSocket('wss://subspace.skunkskeptic.dev:8443');
                 this.isMultiplayer = true;
 
                 this.ws.onopen = () => {
