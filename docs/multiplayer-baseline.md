@@ -6,7 +6,7 @@
 - Power-ups and bounty totals are tracked on the server, then rebroadcast to keep every client aligned.
 
 ## Connection Lifecycle
-1. Player clicks "Join Multiplayer"; client instantiates `WebSocket('wss://172.239.66.45:8443')` (`subspace.html`).
+1. Player clicks "Join Multiplayer"; client instantiates `WebSocket('wss://172.233.149.241:8443')` (`subspace.html`).
 2. Server allocates `playerId`, seeds default position `(4000,3000)`, stores `WebSocket` handle (`server.js`).
 3. Server sends `init` with `playerId`, current power-ups, and a snapshot of other players.
 4. Client hydrates remote ships, switches to authoritative power-up mode, and tracks bounty per `playerId`.
