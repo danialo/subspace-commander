@@ -882,13 +882,17 @@
 
                 // Create wall behind ship
                 if (window.game && window.game.walls) {
-                    const wall = new Wall(this.pos.x, this.pos.y, this.angle);
+                    const ownerId = window.game.playerId || 'local';
+                    const wallId = window.game.generateEntityId('wall');
+                    const wall = new Wall(this.pos.x, this.pos.y, this.angle, wallId, ownerId);
                     window.game.walls.push(wall);
 
                     // Send wall to multiplayer server if connected
                     if (window.game.isMultiplayer) {
                         window.game.sendMultiplayerMessage({
                             type: 'wall',
+                            id: wallId,
+                            ownerId: ownerId,
                             x: this.pos.x,
                             y: this.pos.y,
                             angle: this.angle
@@ -1620,7 +1624,9 @@
 
         // Wall class - blocks bullets and bounces bombs
         class Wall {
-            constructor(x, y, angle) {
+            constructor(x, y, angle, id = null, ownerId = null) {
+                this.id = id;
+                this.ownerId = ownerId;
                 this.x = x;
                 this.y = y;
                 this.angle = angle;
@@ -1694,6 +1700,11 @@
             }
 
             checkBombCollision(bomb) {
+                // Skip if bomb just hit this wall (prevents double-hits from adjacent bricks)
+                if (bomb.lastWallHitId === this.id) {
+                    return false;
+                }
+
                 for (let brick of this.bricks) {
                     const dx = bomb.pos.x - brick.x;
                     const dy = bomb.pos.y - brick.y;
@@ -1705,16 +1716,28 @@
                             return true; // Destroy bomb (already bounced once)
                         }
 
-                        // First bounce - allow it
-                        const angle = Math.atan2(dy, dx);
-                        const speed = Math.sqrt(bomb.vel.x * bomb.vel.x + bomb.vel.y * bomb.vel.y);
-                        bomb.vel.x = Math.cos(angle) * speed;
-                        bomb.vel.y = Math.sin(angle) * speed;
+                        // First bounce - reflect off wall surface
+                        // Calculate wall's surface normal (perpendicular to wall direction)
+                        const wallNormalX = Math.cos(this.angle);
+                        const wallNormalY = Math.sin(this.angle);
 
-                        bomb.pos.x = brick.x + Math.cos(angle) * (this.brickSize / 2 + bomb.size + 5);
-                        bomb.pos.y = brick.y + Math.sin(angle) * (this.brickSize / 2 + bomb.size + 5);
+                        // Reflect velocity: v' = v - 2(v · n)n
+                        const dotProduct = bomb.vel.x * wallNormalX + bomb.vel.y * wallNormalY;
+                        bomb.vel.x = bomb.vel.x - 2 * dotProduct * wallNormalX;
+                        bomb.vel.y = bomb.vel.y - 2 * dotProduct * wallNormalY;
+
+                        // Apply slight energy loss on bounce
+                        bomb.vel.x *= 0.85;
+                        bomb.vel.y *= 0.85;
+
+                        // Push bomb away from brick to prevent re-collision
+                        const pushAngle = Math.atan2(dy, dx);
+                        bomb.pos.x = brick.x + Math.cos(pushAngle) * (this.brickSize / 2 + bomb.size + 5);
+                        bomb.pos.y = brick.y + Math.sin(pushAngle) * (this.brickSize / 2 + bomb.size + 5);
 
                         bomb.wallBounceCount = (bomb.wallBounceCount || 0) + 1;
+                        bomb.lastWallHitId = this.id; // Track which wall was hit
+                        bomb.lastWallHitTime = Date.now(); // Track when wall was hit
                         return false; // Keep bomb after first bounce
                     }
                 }
@@ -2325,8 +2348,10 @@
                                 const wallX = Number(wallData.x);
                                 const wallY = Number(wallData.y);
                                 const wallAngle = Number(wallData.angle);
+                                const wallId = wallData.id || this.generateEntityId('wall');
+                                const wallOwnerId = wallData.ownerId || null;
                                 if (Number.isFinite(wallX) && Number.isFinite(wallY) && Number.isFinite(wallAngle)) {
-                                    const wall = new Wall(wallX, wallY, wallAngle);
+                                    const wall = new Wall(wallX, wallY, wallAngle, wallId, wallOwnerId);
                                     this.walls.push(wall);
                                 }
                             });
@@ -2506,8 +2531,10 @@
                         const wallX = Number(data.x);
                         const wallY = Number(data.y);
                         const wallAngle = Number(data.angle);
+                        const wallId = data.id || this.generateEntityId('wall');
+                        const wallOwnerId = data.ownerId || null;
                         if (Number.isFinite(wallX) && Number.isFinite(wallY) && Number.isFinite(wallAngle)) {
-                            const wall = new Wall(wallX, wallY, wallAngle);
+                            const wall = new Wall(wallX, wallY, wallAngle, wallId, wallOwnerId);
                             this.walls.push(wall);
                         }
                         break;
@@ -4599,6 +4626,13 @@
                     // Check bomb-wall collisions (bombs bounce once, then explode)
                     for (let i = this.bombs.length - 1; i >= 0; i--) {
                         const bomb = this.bombs[i];
+
+                        // Clear lastWallHitId after 100ms to allow hitting same wall again if bomb loops back
+                        if (bomb.lastWallHitTime && Date.now() - bomb.lastWallHitTime > 100) {
+                            bomb.lastWallHitId = null;
+                            bomb.lastWallHitTime = null;
+                        }
+
                         let bombDestroyed = false;
                         for (const wall of this.walls) {
                             if (wall.checkBombCollision(bomb)) {
