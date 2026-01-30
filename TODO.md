@@ -27,3 +27,4 @@
 - [ ] Add AI ship names (e.g., "Bot-1", or random names, or prompt at load).
 - [ ] Add team system (team colors, friendly fire rules, team-based objectives).
 - [ ] Change the shape of mines (visual distinction from bombs).
+- [ ] Make mines recyclable (placing a new mine after max should move oldest mine to new location).

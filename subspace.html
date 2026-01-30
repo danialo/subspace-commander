@@ -2157,14 +2157,54 @@
             draw(ctx, viewport) {
                 if (!this.exploded) {
                     const screenPos = viewport.worldToScreen(this.pos.x, this.pos.y);
-                    const speed = Math.sqrt(this.vel.x * this.vel.x + this.vel.y * this.vel.y);
-                    const baseRadius = this.size;
-                    const minRadius = Math.max(2, baseRadius * 0.4);
-                    const radius = speed > 600 ? Math.max(minRadius, baseRadius * (800 / (speed + 400))) : baseRadius;
-                    ctx.fillStyle = this.color;
-                    ctx.beginPath();
-                    ctx.arc(screenPos.x, screenPos.y, radius, 0, Math.PI * 2);
-                    ctx.fill();
+
+                    if (this.isMine) {
+                        // Draw mine as a distinct diamond/spiky shape
+                        const size = 6;
+                        const now = Date.now();
+                        const pulse = 0.7 + 0.3 * Math.sin(now / 150); // Subtle pulse
+
+                        ctx.save();
+                        ctx.translate(screenPos.x, screenPos.y);
+
+                        // Outer glow
+                        ctx.fillStyle = 'rgba(255, 100, 100, 0.3)';
+                        ctx.beginPath();
+                        ctx.moveTo(0, -size * 1.5 * pulse);
+                        ctx.lineTo(size * 1.5 * pulse, 0);
+                        ctx.lineTo(0, size * 1.5 * pulse);
+                        ctx.lineTo(-size * 1.5 * pulse, 0);
+                        ctx.closePath();
+                        ctx.fill();
+
+                        // Inner diamond - bright red/orange
+                        ctx.fillStyle = '#ff4444';
+                        ctx.beginPath();
+                        ctx.moveTo(0, -size);
+                        ctx.lineTo(size, 0);
+                        ctx.lineTo(0, size);
+                        ctx.lineTo(-size, 0);
+                        ctx.closePath();
+                        ctx.fill();
+
+                        // Center dot
+                        ctx.fillStyle = '#ffcc00';
+                        ctx.beginPath();
+                        ctx.arc(0, 0, 2, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        ctx.restore();
+                    } else {
+                        // Regular bomb - circle
+                        const speed = Math.sqrt(this.vel.x * this.vel.x + this.vel.y * this.vel.y);
+                        const baseRadius = this.size;
+                        const minRadius = Math.max(2, baseRadius * 0.4);
+                        const radius = speed > 600 ? Math.max(minRadius, baseRadius * (800 / (speed + 400))) : baseRadius;
+                        ctx.fillStyle = this.color;
+                        ctx.beginPath();
+                        ctx.arc(screenPos.x, screenPos.y, radius, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
                 } else {
                     // Draw shrapnel
                     for (const shrapnel of this.shrapnelPieces) {
@@ -2481,18 +2521,38 @@
 
                 this.centerX = this.canvas.width / 2;
                 this.centerY = this.canvas.height / 2;
+
+                // Player position for centered radar
+                this.playerX = 0;
+                this.playerY = 0;
             }
 
             // Convert world coordinates to minimap coordinates
+            // Centers on player position and shows surrounding area
             worldToMinimap(worldX, worldY) {
-                const scaleX = (this.canvas.width - 4) / this.worldWidth;  // -4 for border padding
-                const scaleY = (this.canvas.height - 4) / this.worldHeight;
-                const scale = Math.min(scaleX, scaleY);
+                // Radar range - how far the radar can see (in world units)
+                const radarRange = 1500;
+
+                const centerX = this.canvas.width / 2;
+                const centerY = this.canvas.height / 2;
+                const usableRadius = this.radarRadius - 2;
+
+                // Scale: map radarRange world units to usableRadius pixels
+                const scale = usableRadius / radarRange;
+
+                // Calculate offset from player position (set in update)
+                const offsetX = worldX - this.playerX;
+                const offsetY = worldY - this.playerY;
 
                 return {
-                    x: (worldX / this.worldWidth) * (this.canvas.width - 4) + 2,
-                    y: (worldY / this.worldHeight) * (this.canvas.height - 4) + 2
+                    x: centerX + offsetX * scale,
+                    y: centerY + offsetY * scale
                 };
+            }
+
+            setPlayerPosition(x, y) {
+                this.playerX = x;
+                this.playerY = y;
             }
 
             clear() {
@@ -2536,13 +2596,29 @@
                 this.ctx.setLineDash([]); // Reset dash
             }
 
-            drawBomb(worldX, worldY, isMine = false) {
+            drawBomb(worldX, worldY) {
                 const pos = this.worldToMinimap(worldX, worldY);
 
-                this.ctx.fillStyle = isMine ? '#ff0000' : '#ff8800';
+                this.ctx.fillStyle = '#ff8800';
                 this.ctx.beginPath();
-                this.ctx.arc(pos.x, pos.y, isMine ? 2 : 1.5, 0, Math.PI * 2);
+                this.ctx.arc(pos.x, pos.y, 1.5, 0, Math.PI * 2);
                 this.ctx.fill();
+            }
+
+            drawMine(worldX, worldY) {
+                const pos = this.worldToMinimap(worldX, worldY);
+
+                // White flashing pinprick - smaller than ships (which are radius 2)
+                const now = Date.now();
+                const flashCycle = Math.sin(now / 80); // Rapid flash (~160ms cycle)
+                const alpha = 0.4 + 0.6 * Math.abs(flashCycle); // Oscillate between 0.4 and 1.0
+
+                this.ctx.fillStyle = '#ffffff';
+                this.ctx.globalAlpha = alpha;
+                this.ctx.beginPath();
+                this.ctx.arc(pos.x, pos.y, 1, 0, Math.PI * 2); // Radius 1 - smaller than ships
+                this.ctx.fill();
+                this.ctx.globalAlpha = 1;
             }
 
             drawWall(bricks) {
@@ -2591,6 +2667,11 @@
             update(game) {
                 this.clear();
 
+                // Set player position for radar centering
+                if (game.playerShip && game.playerShip.pos) {
+                    this.setPlayerPosition(game.playerShip.pos.x, game.playerShip.pos.y);
+                }
+
                 // Draw safe zone
                 if (game.safeZone) {
                     this.drawSafeZone(game.safeZone.x, game.safeZone.y, game.safeZone.radius);
@@ -2605,11 +2686,19 @@
                     });
                 }
 
-                // Draw bombs and mines
+                // Draw bombs (not mines - mines shown separately)
                 if (game.bombs) {
+                    const localPlayerId = game.playerId || 'local';
                     game.bombs.forEach(bomb => {
                         if (bomb && bomb.pos) {
-                            this.drawBomb(bomb.pos.x, bomb.pos.y, bomb.isMine || false);
+                            if (bomb.isMine) {
+                                // Only show player's own mines on minimap
+                                if (bomb.ownerId === localPlayerId) {
+                                    this.drawMine(bomb.pos.x, bomb.pos.y);
+                                }
+                            } else {
+                                this.drawBomb(bomb.pos.x, bomb.pos.y);
+                            }
                         }
                     });
                 }
