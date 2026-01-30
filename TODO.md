@@ -29,3 +29,4 @@
 - [x] Change the shape of mines (visual distinction from bombs).
 - [ ] Make mines recyclable (placing a new mine after max should move oldest mine to new location).
 - [ ] Add more intelligent AI (better pathfinding, tactics, threat assessment).
+- [ ] Add scoreboard (requires player names system first).

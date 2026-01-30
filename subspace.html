@@ -1084,9 +1084,10 @@
 
         // AIController class - Controls AI ships with state machine
         class AIController {
-            constructor(ship, game) {
+            constructor(ship, game, ownerId = null) {
                 this.ship = ship;
                 this.game = game;
+                this.ownerId = ownerId;  // e.g., 'ai-1' for identifying own mines
 
                 // State machine
                 this.state = 'COLLECTING';
@@ -1285,17 +1286,46 @@
             findNearbyBombs() {
                 const ship = this.ship;
                 const nearby = [];
-                const checkRadiusSq = 150 * 150;
+                const checkRadiusSq = 200 * 200;  // Detection range for mines
 
-                for (const bomb of this.game.bombs || []) {
+                const bombs = this.game.bombs || [];
+                for (const bomb of bombs) {
+                    // Only track mines (stationary threats) - skip own mines
+                    if (!bomb.isMine) continue;
+                    if (this.ownerId && bomb.ownerId === this.ownerId) continue;
+
                     const dx = bomb.pos.x - ship.pos.x;
                     const dy = bomb.pos.y - ship.pos.y;
-                    if (dx * dx + dy * dy < checkRadiusSq) {
-                        nearby.push(bomb);
+                    const distSq = dx * dx + dy * dy;
+                    if (distSq < checkRadiusSq) {
+                        nearby.push({ bomb, distSq, dx, dy });
                     }
                 }
 
                 return nearby;
+            }
+
+            getMineAvoidanceVector() {
+                const mines = this.perception.nearbyBombs;
+                if (mines.length === 0) return null;
+
+                // Calculate avoidance vector - run away from nearby mines
+                let avoidX = 0;
+                let avoidY = 0;
+
+                for (const { bomb, distSq, dx, dy } of mines) {
+                    const dist = Math.sqrt(distSq) || 1;
+                    // Stronger avoidance when closer (inverse square)
+                    const strength = 1 / (dist * dist) * 10000;
+                    avoidX -= (dx / dist) * strength;
+                    avoidY -= (dy / dist) * strength;
+                }
+
+                // Return target point to steer toward (away from mines)
+                return {
+                    x: this.ship.pos.x + avoidX * 100,
+                    y: this.ship.pos.y + avoidY * 100
+                };
             }
 
             evaluateStateTransitions() {
@@ -1428,6 +1458,18 @@
 
             generateCollectingInput(input, deltaTime) {
                 const powerUp = this.perception.nearestPowerUp;
+                const nearbyMines = this.perception.nearbyBombs;
+                const mineAvoid = nearbyMines.length > 0 ? this.getMineAvoidanceVector() : null;
+
+                // Mine avoidance takes priority
+                if (mineAvoid && nearbyMines.some(m => m.distSq < 150 * 150)) {
+                    const mineSteering = this.getSteeringToward(mineAvoid.x, mineAvoid.y);
+                    input.left = mineSteering.turnLeft;
+                    input.right = mineSteering.turnRight;
+                    input.thrust = true;
+                    input.boost = true;
+                    return input;
+                }
 
                 if (powerUp) {
                     const steering = this.getSteeringToward(powerUp.pos.x, powerUp.pos.y);
@@ -1455,16 +1497,25 @@
                 const target = this.currentTarget;
                 if (!target) return input;
 
-                // Check for incoming bullets - dodge while attacking
+                // Check for threats - bullets and mines
                 const incomingBullets = this.perception.incomingBullets;
+                const nearbyMines = this.perception.nearbyBombs;
                 const dodgeVector = incomingBullets.length > 0 ? this.getDodgeVector() : null;
+                const mineAvoid = nearbyMines.length > 0 ? this.getMineAvoidanceVector() : null;
 
                 // Lead the target
                 const leadPos = this.getLeadPosition(target);
                 const steering = this.getSteeringToward(leadPos.x, leadPos.y);
 
-                // If dodging, blend dodge direction with attack direction
-                if (dodgeVector && incomingBullets.length >= 2) {
+                // Priority: mines > bullets > attack
+                if (mineAvoid && nearbyMines.length > 0) {
+                    const closestDist = Math.min(...nearbyMines.map(m => Math.sqrt(m.distSq)));
+                    const mineSteering = this.getSteeringToward(mineAvoid.x, mineAvoid.y);
+                    input.left = mineSteering.turnLeft;
+                    input.right = mineSteering.turnRight;
+                    input.thrust = true;
+                    input.boost = closestDist < 150;
+                } else if (dodgeVector && incomingBullets.length >= 2) {
                     // Prioritize dodging when multiple bullets incoming
                     const dodgeSteering = this.getSteeringToward(dodgeVector.x, dodgeVector.y);
                     input.left = dodgeSteering.turnLeft;
@@ -4363,9 +4414,9 @@
 
                 const ship = new Ship(spawnX, spawnY, false);
                 ship.alive = true;
-                const controller = new AIController(ship, this);
-
                 const aiId = this.aiShips.length + 1;
+                const ownerId = `ai-${aiId}`;
+                const controller = new AIController(ship, this, ownerId);
                 const ai = {
                     ship,
                     controller,
