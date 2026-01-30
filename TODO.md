@@ -24,7 +24,8 @@
 - [x] Lock down safe zone (no shooting, bombs, or drops inside).
 - [x] Add AI players/bots for single-player and practice modes.
 - [ ] Display AI ship bounty above their ship (like players).
-- [ ] Add AI ship names (e.g., "Bot-1", or random names, or prompt at load).
+- [x] Add AI ship names (e.g., "Bot-1", or random names, or prompt at load).
 - [ ] Add team system (team colors, friendly fire rules, team-based objectives).
-- [ ] Change the shape of mines (visual distinction from bombs).
+- [x] Change the shape of mines (visual distinction from bombs).
 - [ ] Make mines recyclable (placing a new mine after max should move oldest mine to new location).
+- [ ] Add more intelligent AI (better pathfinding, tactics, threat assessment).

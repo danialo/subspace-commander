@@ -1117,9 +1117,11 @@
                     attackRange: 400,
                     evadeThreshold: 3,
                     bulletDodgeRadius: 100,
-                    energyReserve: 200,
-                    aimLeadFactor: 0.8,
-                    aggressionRadius: 500
+                    energyReserve: 400,      // Higher reserve - don't drain to nothing
+                    aimLeadFactor: 1.0,      // Full lead prediction
+                    aggressionRadius: 500,
+                    aimTolerance: 0.08,      // Tighter aim (~4.5 degrees)
+                    minHitProbability: 0.4   // Only fire if 40%+ chance to hit
                 };
             }
 
@@ -1299,32 +1301,40 @@
             evaluateStateTransitions() {
                 const enemies = this.perception.visibleEnemies;
                 const bullets = this.perception.incomingBullets;
+                const energy = this.ship.energy;
+                const retreatThreshold = 300; // Only retreat when critically low
 
                 switch (this.state) {
                     case 'COLLECTING':
+                        // Attack when enemies visible (attack+evade combined)
                         if (enemies.length > 0) {
                             this.currentTarget = this.selectBestTarget(enemies);
                             this.transitionTo('ATTACKING');
-                        } else if (bullets.length >= this.config.evadeThreshold) {
-                            this.transitionTo('EVADING');
                         }
                         break;
 
                     case 'ATTACKING':
-                        if (bullets.length >= this.config.evadeThreshold) {
-                            this.stateData.previousState = 'ATTACKING';
-                            this.transitionTo('EVADING');
+                        // Only retreat when critically low energy
+                        if (energy < retreatThreshold) {
+                            this.currentTarget = null;
+                            this.transitionTo('RETREATING');
                         } else if (!this.isTargetValid()) {
                             this.currentTarget = null;
+                            this.transitionTo('COLLECTING');
+                        }
+                        // Note: dodging happens DURING attacking, not as separate state
+                        break;
+
+                    case 'RETREATING':
+                        // Recharged enough to fight again
+                        if (energy > 500) {
                             this.transitionTo('COLLECTING');
                         }
                         break;
 
                     case 'EVADING':
-                        if (bullets.length < this.config.evadeThreshold && this.stateTimer > 1.0) {
-                            const returnState = this.stateData.previousState || 'COLLECTING';
-                            this.transitionTo(returnState);
-                        }
+                        // Legacy - transition back to collecting
+                        this.transitionTo('COLLECTING');
                         break;
                 }
             }
@@ -1390,6 +1400,8 @@
                         return this.generateAttackingInput(input, deltaTime);
                     case 'EVADING':
                         return this.generateEvadingInput(input, deltaTime);
+                    case 'RETREATING':
+                        return this.generateRetreatingInput(input, deltaTime);
                 }
 
                 return input;
@@ -1443,39 +1455,54 @@
                 const target = this.currentTarget;
                 if (!target) return input;
 
+                // Check for incoming bullets - dodge while attacking
+                const incomingBullets = this.perception.incomingBullets;
+                const dodgeVector = incomingBullets.length > 0 ? this.getDodgeVector() : null;
+
                 // Lead the target
                 const leadPos = this.getLeadPosition(target);
                 const steering = this.getSteeringToward(leadPos.x, leadPos.y);
 
-                input.left = steering.turnLeft;
-                input.right = steering.turnRight;
+                // If dodging, blend dodge direction with attack direction
+                if (dodgeVector && incomingBullets.length >= 2) {
+                    // Prioritize dodging when multiple bullets incoming
+                    const dodgeSteering = this.getSteeringToward(dodgeVector.x, dodgeVector.y);
+                    input.left = dodgeSteering.turnLeft;
+                    input.right = dodgeSteering.turnRight;
+                    input.thrust = true;
+                } else {
+                    input.left = steering.turnLeft;
+                    input.right = steering.turnRight;
+                    input.thrust = steering.distance > 80;
+                }
 
-                // Aggressive pursuit
-                input.thrust = steering.distance > 100;
-
-                // Boost when chasing
-                if (steering.distance > 200 && this.ship.energy > this.config.energyReserve) {
+                // Boost when chasing or evading
+                if ((steering.distance > 200 || incomingBullets.length > 0) &&
+                    this.ship.energy > this.config.energyReserve) {
                     input.boost = true;
                 }
 
-                // Fire when well-aligned and have energy
-                const aimTolerance = 0.15;
-                if (Math.abs(steering.angleDiff) < aimTolerance &&
+                // Fire when reasonably aligned and have energy
+                const hitProb = this.calculateHitProbability(target, steering);
+                if (Math.abs(steering.angleDiff) < 0.2 &&  // Loosened from 0.08
                     this.ship.energy > this.config.energyReserve &&
-                    steering.distance < 600) {
+                    steering.distance < 550 &&
+                    hitProb >= 0.25) {  // Lowered from 0.4
                     input.fire = true;
                 }
 
-                // Use bombs at medium range (lowered energy threshold)
-                if (Math.abs(steering.angleDiff) < 0.3 &&
-                    steering.distance > 150 && steering.distance < 400 &&
-                    this.ship.energy > 400) {
+                // Use bombs at medium range when well-aimed
+                if (Math.abs(steering.angleDiff) < 0.15 &&
+                    steering.distance > 120 && steering.distance < 400 &&
+                    this.ship.energy > 550 &&
+                    hitProb >= 0.35 &&
+                    Math.random() < 0.15) {
                     input.bomb = true;
                 }
 
                 // Deploy mines when being chased (target behind us)
-                if (steering.distance < 200 && Math.abs(steering.angleDiff) > Math.PI * 0.6 &&
-                    this.ship.energy > 400 && Math.random() < 0.02) {
+                if (steering.distance < 180 && Math.abs(steering.angleDiff) > Math.PI * 0.6 &&
+                    this.ship.energy > 500 && Math.random() < 0.02) {
                     input.deployMine = true;
                 }
 
@@ -1502,6 +1529,68 @@
                 if (this.ship.energy > 400 && Math.random() < 0.03) {
                     input.deployMine = true;
                 }
+
+                return input;
+            }
+
+            generateRetreatingInput(input, deltaTime) {
+                // Run away from nearest enemy, seek power-ups to recharge
+                const enemies = this.perception.visibleEnemies;
+                const powerUp = this.perception.nearestPowerUp;
+
+                // Find nearest threat to run from
+                let fleeX = this.ship.pos.x;
+                let fleeY = this.ship.pos.y;
+
+                if (enemies.length > 0) {
+                    // Run opposite direction from nearest enemy
+                    let nearest = enemies[0];
+                    let nearestDistSq = Infinity;
+                    for (const enemy of enemies) {
+                        const dx = enemy.pos.x - this.ship.pos.x;
+                        const dy = enemy.pos.y - this.ship.pos.y;
+                        const distSq = dx * dx + dy * dy;
+                        if (distSq < nearestDistSq) {
+                            nearestDistSq = distSq;
+                            nearest = enemy;
+                        }
+                    }
+
+                    // Flee direction (opposite of enemy)
+                    const dx = this.ship.pos.x - nearest.pos.x;
+                    const dy = this.ship.pos.y - nearest.pos.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                    // Target point 500 units away from enemy
+                    fleeX = this.ship.pos.x + (dx / dist) * 500;
+                    fleeY = this.ship.pos.y + (dy / dist) * 500;
+
+                    // If there's a power-up roughly in our flee direction, go for it
+                    if (powerUp) {
+                        const toPowerX = powerUp.pos.x - this.ship.pos.x;
+                        const toPowerY = powerUp.pos.y - this.ship.pos.y;
+                        // Dot product - positive if power-up is in flee direction
+                        const dot = toPowerX * dx + toPowerY * dy;
+                        if (dot > 0) {
+                            fleeX = powerUp.pos.x;
+                            fleeY = powerUp.pos.y;
+                        }
+                    }
+                } else if (powerUp) {
+                    // No enemies visible, go get power-ups
+                    fleeX = powerUp.pos.x;
+                    fleeY = powerUp.pos.y;
+                }
+
+                // Clamp to world bounds
+                fleeX = Math.max(100, Math.min(fleeX, 7900));
+                fleeY = Math.max(220, Math.min(fleeY, 4980));
+
+                const steering = this.getSteeringToward(fleeX, fleeY);
+                input.left = steering.turnLeft;
+                input.right = steering.turnRight;
+                input.thrust = true;  // Always thrust when retreating
+                input.boost = true;   // Boost to get away fast
 
                 return input;
             }
@@ -1551,6 +1640,43 @@
                 const predictedY = target.pos.y + target.vel.y * bulletTime * this.config.aimLeadFactor;
 
                 return { x: predictedX, y: predictedY };
+            }
+
+            calculateHitProbability(target, steering) {
+                // Estimate chance of hitting based on:
+                // 1. Distance (farther = harder)
+                // 2. Target's perpendicular velocity (dodging = harder)
+                // 3. Aim alignment (better aligned = easier)
+
+                const distance = steering.distance;
+                const bulletSpeed = 600;
+                const bulletTime = distance / bulletSpeed;
+
+                // Get target's velocity perpendicular to the shot line
+                const dx = target.pos.x - this.ship.pos.x;
+                const dy = target.pos.y - this.ship.pos.y;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                const shotDirX = dx / dist;
+                const shotDirY = dy / dist;
+
+                // Perpendicular velocity (cross product magnitude)
+                const perpVel = Math.abs(target.vel.x * shotDirY - target.vel.y * shotDirX);
+
+                // How far target moves perpendicular during bullet flight
+                const perpMovement = perpVel * bulletTime;
+
+                // Ship hitbox is roughly 18 units, so perpMovement > 18 means likely miss
+                const hitboxSize = 18;
+                const perpFactor = Math.max(0, 1 - (perpMovement / (hitboxSize * 2)));
+
+                // Distance penalty: closer is easier
+                const distFactor = Math.max(0, 1 - (distance / 600));
+
+                // Aim alignment bonus
+                const aimFactor = Math.max(0, 1 - (Math.abs(steering.angleDiff) / 0.3));
+
+                // Combined probability
+                return perpFactor * 0.5 + distFactor * 0.3 + aimFactor * 0.2;
             }
 
             getDodgeVector() {
