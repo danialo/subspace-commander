@@ -2758,7 +2758,7 @@
                 this.mineLimit = 5;
                 this.entityIdCounter = 1;
                 this.repelRadius = 216; // 12x ship size (18 * 12)
-                this.repelForce = 1800;
+                this.repelForce = 2340; // 30% stronger than original 1800
                 this.repelShipSpeedMultiplier = 4.5;
                 this.repelBombSpeedCap = 900;
                 this.repelBulletSpeedCap = 1100;
@@ -3002,15 +3002,16 @@
                             const warpPlayerId = data.playerId;
                             const warpX = Number(data.x);
                             const warpY = Number(data.y);
+                            const isLocalWarp = this.isLocalPlayer(warpPlayerId);
                             if (Number.isFinite(warpX) && Number.isFinite(warpY)) {
                                 this.performLocalWarp(warpPlayerId);
-                                const ship = warpPlayerId === this.playerId ? this.playerShip : this.otherPlayers.get(warpPlayerId);
+                                const ship = isLocalWarp ? this.playerShip : this.otherPlayers.get(warpPlayerId);
                                 if (ship) {
                                     ship.pos.x = warpX;
                                     ship.pos.y = warpY;
                                 }
                             }
-                            if (warpPlayerId === this.playerId) {
+                            if (isLocalWarp) {
                                 const ship = this.playerShip;
                                 if (ship && Number.isFinite(Number(data.energy))) {
                                     ship.energy = Number(data.energy);
@@ -3399,7 +3400,9 @@
                     this.showKillMessage(`You killed ${ai.name}[${aiBounty}]`);
 
                     // Respawn AI after delay
+                    console.log(`[AI DEBUG] Before respawn timer (bullet) - aiShips.length: ${this.aiShips.length}, ai.id: ${ai.id}`);
                     setTimeout(() => {
+                        console.log(`[AI DEBUG] Respawn timer fired (bullet) for ${ai.name} - aiShips.length: ${this.aiShips.length}, still in array: ${this.aiShips.includes(ai)}`);
                         if (this.aiShips.includes(ai)) {
                             this.respawnAIShip(ai);
                         }
@@ -3408,14 +3411,20 @@
             }
 
             respawnAIShip(ai) {
+                console.log(`[AI DEBUG] respawnAIShip called for ${ai.name} (id: ${ai.id}) - aiShips.length: ${this.aiShips.length}`);
                 // Reset ship state
                 const margin = 300;
+                const minX = margin;
+                const maxX = WORLD_WIDTH - margin;
+                const minY = PLAYFIELD_TOP + margin;
+                const maxY = PLAYFIELD_BOTTOM - margin;
+
                 let spawnX, spawnY;
                 let attempts = 0;
 
                 do {
-                    spawnX = margin + Math.random() * (8000 - 2 * margin);
-                    spawnY = 120 + margin + Math.random() * (5200 - 240 - 2 * margin);
+                    spawnX = minX + Math.random() * (maxX - minX);
+                    spawnY = minY + Math.random() * (maxY - minY);
                     attempts++;
 
                     const dxPlayer = spawnX - this.playerShip.pos.x;
@@ -3430,6 +3439,10 @@
                         break;
                     }
                 } while (attempts < 20);
+
+                // Clamp to valid bounds even if attempts exhausted
+                spawnX = Math.max(minX, Math.min(maxX, spawnX));
+                spawnY = Math.max(minY, Math.min(maxY, spawnY));
 
                 ai.ship.pos.x = spawnX;
                 ai.ship.pos.y = spawnY;
@@ -3691,12 +3704,8 @@
                     return false;
                 }
 
-                // Prevent self-damage: only if we have distinct player IDs and they match
-                // In multiplayer, bomb.ownerId will be the actual player ID
-                // We skip this check if ownerId is 'local' (single player mode)
-                if (bomb && bomb.ownerId && playerId &&
-                    bomb.ownerId !== 'local' && playerId !== 'local' &&
-                    bomb.ownerId === playerId) {
+                // Mines should never trigger on their owner
+                if (bomb && bomb.isMine && bomb.ownerId && playerId && bomb.ownerId === playerId) {
                     return false;
                 }
 
@@ -3824,8 +3833,18 @@
                         if (ai.ship.energy <= 0) {
                             ai.ship.alive = false;
                             ai.ship.die();
-                            console.log(`AI ship "${ai.name}" destroyed by bomb!`);
+
+                            // Reward player for killing AI - gain the AI's bounty
+                            const aiBounty = ai.bounty || 0;
+                            this.powerUpsCollected += aiBounty;
+                            this.updateLocalBounty();
+
+                            console.log(`AI ship "${ai.name}" destroyed by bomb! Player gains bounty: ${aiBounty}`);
+                            this.showKillMessage(`You killed ${ai.name}[${aiBounty}]`);
+
+                            console.log(`[AI DEBUG] Before respawn timer - aiShips.length: ${this.aiShips.length}, ai.id: ${ai.id}`);
                             setTimeout(() => {
+                                console.log(`[AI DEBUG] Respawn timer fired for ${ai.name} - aiShips.length: ${this.aiShips.length}, still in array: ${this.aiShips.includes(ai)}`);
                                 if (this.aiShips.includes(ai)) {
                                     this.respawnAIShip(ai);
                                 }
@@ -4094,13 +4113,17 @@
                 // Spawn away from player and safe zone
                 const margin = 300;
                 const safeZone = this.safeZone;
+                const minX = margin;
+                const maxX = WORLD_WIDTH - margin;
+                const minY = PLAYFIELD_TOP + margin;
+                const maxY = PLAYFIELD_BOTTOM - margin;
 
                 let spawnX, spawnY;
                 let attempts = 0;
 
                 do {
-                    spawnX = margin + Math.random() * (8000 - 2 * margin);
-                    spawnY = 120 + margin + Math.random() * (5200 - 240 - 2 * margin);
+                    spawnX = minX + Math.random() * (maxX - minX);
+                    spawnY = minY + Math.random() * (maxY - minY);
                     attempts++;
 
                     // Check distance from player
@@ -4119,6 +4142,10 @@
                     }
                 } while (attempts < 20);
 
+                // Clamp to valid bounds even if attempts exhausted
+                spawnX = Math.max(minX, Math.min(maxX, spawnX));
+                spawnY = Math.max(minY, Math.min(maxY, spawnY));
+
                 const ship = new Ship(spawnX, spawnY, false);
                 ship.alive = true;
                 const controller = new AIController(ship, this);
@@ -4134,7 +4161,7 @@
                 };
 
                 this.aiShips.push(ai);
-                console.log(`AI ship "${ai.name}" spawned at (${Math.round(spawnX)}, ${Math.round(spawnY)})`);
+                console.log(`AI ship "${ai.name}" spawned at (${Math.round(spawnX)}, ${Math.round(spawnY)}) - bounds: X[${minX}-${maxX}] Y[${minY}-${maxY}]`);
 
                 // Update status
                 const statusEl = document.getElementById('aiStatus');
@@ -4192,6 +4219,9 @@
 
             setupEventListeners() {
                 document.addEventListener('keydown', (e) => {
+                    if (e.code === 'Digit1' || e.code === 'Numpad1') {
+                        console.log('[KEY DEBUG] Digit1/Numpad1 pressed, shiftKey:', e.shiftKey);
+                    }
                     if (e.code === 'F7') {
                         this.attemptWarpToSafeZone();
                         e.preventDefault();
@@ -4273,7 +4303,8 @@
             }
 
             performLocalWarp(playerId) {
-                const ship = playerId === this.playerId ? this.playerShip : this.otherPlayers.get(playerId);
+                const isLocal = this.isLocalPlayer(playerId);
+                const ship = isLocal ? this.playerShip : this.otherPlayers.get(playerId);
                 if (!ship || !this.safeZone) {
                     return;
                 }
@@ -4292,7 +4323,7 @@
                     ship.repelSpeedMultiplierActive = 1;
                 }
 
-                if (playerId === this.playerId) {
+                if (isLocal) {
                     this.lastBroadcastState.time = 0;
                     this.lastBroadcastState.x = ship.pos.x;
                     this.lastBroadcastState.y = ship.pos.y;
@@ -4351,7 +4382,7 @@
 
                 this.warpBeacons.set(ownerId, beacon);
 
-                const ship = ownerId === this.playerId ? this.playerShip : this.otherPlayers.get(ownerId);
+                const ship = this.isLocalPlayer(ownerId) ? this.playerShip : this.otherPlayers.get(ownerId);
                 if (ship) {
                     ship.activeWarpBeacon = beacon;
                 }
@@ -4371,7 +4402,7 @@
 
                 this.warpBeacons.delete(ownerId);
 
-                const ship = ownerId === this.playerId ? this.playerShip : this.otherPlayers.get(ownerId);
+                const ship = this.isLocalPlayer(ownerId) ? this.playerShip : this.otherPlayers.get(ownerId);
                 if (ship) {
                     ship.activeWarpBeacon = null;
                 }
@@ -4447,10 +4478,13 @@
             }
 
             tryPlaceWarpBeacon() {
+                console.log('[WARP DEBUG] tryPlaceWarpBeacon called');
                 const ship = this.playerShip;
                 if (!ship) {
+                    console.log('[WARP DEBUG] No ship');
                     return;
                 }
+                console.log('[WARP DEBUG] warpCount:', ship.warpCount);
                 if (ship.warpCount <= 0) {
                     this.showWarpNotification('No warp device available', 'Collect warp power-ups');
                     return;
@@ -4462,6 +4496,7 @@
                 }
 
                 const ownerId = this.getLocalPlayerId();
+                console.log('[WARP DEBUG] Placing beacon for ownerId:', ownerId);
                 const now = this.getNow();
                 const beaconId = this.generateEntityId('warp');
                 const expiresAt = now + this.warpBeaconLifetimeMs;
@@ -4476,6 +4511,8 @@
                     createdAt: now,
                     expiresAt
                 }, { announce: true });
+                console.log('[WARP DEBUG] Beacon placed:', beacon);
+                console.log('[WARP DEBUG] warpBeacons map after:', [...this.warpBeacons.entries()]);
 
                 if (this.isMultiplayer) {
                     this.sendMultiplayerMessage({
@@ -4491,20 +4528,28 @@
             }
 
             tryActivateWarpBeacon() {
+                console.log('[WARP DEBUG] tryActivateWarpBeacon called');
                 const ownerId = this.getLocalPlayerId();
+                console.log('[WARP DEBUG] ownerId:', ownerId);
                 const beacon = this.getWarpBeacon(ownerId);
+                console.log('[WARP DEBUG] beacon found:', beacon);
+                console.log('[WARP DEBUG] warpBeacons map:', [...this.warpBeacons.entries()]);
                 if (!beacon) {
+                    console.log('[WARP DEBUG] No beacon - showing notification');
                     this.showWarpNotification('No warp beacon deployed');
                     return;
                 }
 
                 const now = this.getNow();
+                console.log('[WARP DEBUG] now:', now, 'beacon.expiresAt:', beacon.expiresAt);
                 if (beacon.isExpired(now)) {
+                    console.log('[WARP DEBUG] Beacon expired');
                     this.clearWarpBeacon(ownerId, { announce: true, reason: 'expired' });
                     this.updateHUD();
                     return;
                 }
 
+                console.log('[WARP DEBUG] Calling performWarpReturn with:', ownerId, beacon.pos.x, beacon.pos.y);
                 this.performWarpReturn(ownerId, beacon.pos.x, beacon.pos.y);
                 this.clearWarpBeacon(ownerId, { announce: false });
                 this.showWarpNotification('Warp engaged', 'Returned to beacon');
@@ -4522,14 +4567,19 @@
             }
 
             performWarpReturn(playerId, x, y) {
-                const ship = playerId === this.playerId ? this.playerShip : this.otherPlayers.get(playerId);
+                const isLocal = this.isLocalPlayer(playerId);
+                const ship = isLocal ? this.playerShip : this.otherPlayers.get(playerId);
+                console.log('[WARP DEBUG] performWarpReturn:', { playerId, x, y, isLocal, shipFound: !!ship });
                 if (!ship) {
+                    console.log('[WARP DEBUG] No ship found, returning early');
                     return;
                 }
 
                 const clamped = this.clampPositionToWorld(x, y, 40);
+                console.log('[WARP DEBUG] Before warp:', { oldX: ship.pos.x, oldY: ship.pos.y });
                 ship.pos.x = clamped.x;
                 ship.pos.y = clamped.y;
+                console.log('[WARP DEBUG] After warp:', { newX: ship.pos.x, newY: ship.pos.y, clampedX: clamped.x, clampedY: clamped.y });
                 if (ship.vel) {
                     ship.vel.x = 0;
                     ship.vel.y = 0;
@@ -4542,7 +4592,7 @@
                     ship.repelSpeedMultiplierActive = 1;
                 }
 
-                if (playerId === this.playerId) {
+                if (isLocal) {
                     this.lastBroadcastState.time = 0;
                     this.lastBroadcastState.x = ship.pos.x;
                     this.lastBroadcastState.y = ship.pos.y;
@@ -5062,6 +5112,12 @@
                 for (const [playerId, ship] of this.otherPlayers.entries()) {
                     processShip(ship, playerId);
                 }
+                // Process AI ships
+                for (const ai of this.aiShips) {
+                    if (ai.ship && ai.ship.alive) {
+                        processShip(ai.ship, `ai-${ai.id}`);
+                    }
+                }
 
                 const processBomb = (bomb) => {
                     if (!bomb || !bomb.pos || !bomb.vel) {
@@ -5125,6 +5181,12 @@
                 processBullets(this.playerShip);
                 for (const ship of this.otherPlayers.values()) {
                     processBullets(ship);
+                }
+                // Process AI ship bullets
+                for (const ai of this.aiShips) {
+                    if (ai.ship) {
+                        processBullets(ai.ship);
+                    }
                 }
             }
 
