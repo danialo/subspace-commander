@@ -1188,24 +1188,29 @@
                 const enemies = [];
                 const radiusSq = this.config.perceptionRadius * this.config.perceptionRadius;
 
-                // Check player ship
+                // Check player ship (ignore if in safe zone - can't be damaged)
                 if (this.game.playerShip && this.game.playerShip !== ship && this.game.playerShip.alive) {
                     const player = this.game.playerShip;
-                    const dx = player.pos.x - ship.pos.x;
-                    const dy = player.pos.y - ship.pos.y;
-                    if (dx * dx + dy * dy < radiusSq) {
-                        enemies.push(player);
+                    // Skip if player is in safe zone
+                    if (!this.game.isInSafeZone(player.pos.x, player.pos.y)) {
+                        const dx = player.pos.x - ship.pos.x;
+                        const dy = player.pos.y - ship.pos.y;
+                        if (dx * dx + dy * dy < radiusSq) {
+                            enemies.push(player);
+                        }
                     }
                 }
 
-                // Check other AI ships
+                // Check other AI ships (ignore if in safe zone)
                 for (const ai of this.game.aiShips || []) {
                     if (ai.ship !== ship && ai.ship.alive) {
                         const other = ai.ship;
-                        const dx = other.pos.x - ship.pos.x;
-                        const dy = other.pos.y - ship.pos.y;
-                        if (dx * dx + dy * dy < radiusSq) {
-                            enemies.push(other);
+                        if (!this.game.isInSafeZone(other.pos.x, other.pos.y)) {
+                            const dx = other.pos.x - ship.pos.x;
+                            const dy = other.pos.y - ship.pos.y;
+                            if (dx * dx + dy * dy < radiusSq) {
+                                enemies.push(other);
+                            }
                         }
                     }
                 }
@@ -1356,6 +1361,9 @@
                 const target = this.currentTarget;
                 if (!target || !target.alive) return false;
 
+                // Target in safe zone = invalid (can't damage them)
+                if (this.game.isInSafeZone(target.pos.x, target.pos.y)) return false;
+
                 const dx = target.pos.x - this.ship.pos.x;
                 const dy = target.pos.y - this.ship.pos.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1458,11 +1466,17 @@
                     input.fire = true;
                 }
 
-                // Use bombs at medium range
+                // Use bombs at medium range (lowered energy threshold)
                 if (Math.abs(steering.angleDiff) < 0.3 &&
                     steering.distance > 150 && steering.distance < 400 &&
-                    this.ship.energy > 500) {
+                    this.ship.energy > 400) {
                     input.bomb = true;
+                }
+
+                // Deploy mines when being chased (target behind us)
+                if (steering.distance < 200 && Math.abs(steering.angleDiff) > Math.PI * 0.6 &&
+                    this.ship.energy > 400 && Math.random() < 0.02) {
+                    input.deployMine = true;
                 }
 
                 return input;
@@ -1482,6 +1496,11 @@
                 // Use burst if available and surrounded
                 if (this.perception.incomingBullets.length >= 4 && this.ship.burstCount > 0) {
                     input.burst = true;
+                }
+
+                // Drop mines while evading (leave traps)
+                if (this.ship.energy > 400 && Math.random() < 0.03) {
+                    input.deployMine = true;
                 }
 
                 return input;
@@ -2720,7 +2739,7 @@
                 this.powerUps = [];
                 this.powerUpSpawnTimer = 0;
                 this.powerUpSpawnInterval = 4; // Spawn every 4 seconds (100% more frequent)
-                this.powerUpsCollected = 0; // Player's bounty/score
+                this.powerUpsCollected = 50; // Player's bounty/score (start with 50)
                 this.playerBounties = new Map();
                 this.safeZone = {
                     x: this.viewport.worldWidth / 2,
@@ -3370,7 +3389,15 @@
                 if (ship.energy <= 0) {
                     ship.alive = false;
                     ship.die();
-                    console.log('AI ship destroyed!');
+
+                    // Reward player for killing AI - gain the AI's bounty
+                    const aiBounty = ai.bounty || 0;
+                    this.powerUpsCollected += aiBounty;
+                    this.updateLocalBounty();
+
+                    console.log(`AI ship "${ai.name}" destroyed! Player gains bounty: ${aiBounty}`);
+                    this.showKillMessage(`You killed ${ai.name}[${aiBounty}]`);
+
                     // Respawn AI after delay
                     setTimeout(() => {
                         if (this.aiShips.includes(ai)) {
@@ -3418,7 +3445,11 @@
                 ai.controller.stateTimer = 0;
                 ai.controller.currentTarget = null;
 
-                console.log(`AI ship respawned at (${Math.round(spawnX)}, ${Math.round(spawnY)})`);
+                // Reset bounty on death (start with 50)
+                ai.bounty = 50;
+                ai.bountyTimer = 0;
+
+                console.log(`AI ship "${ai.name}" respawned at (${Math.round(spawnX)}, ${Math.round(spawnY)})`);
             }
 
             sendPlayerDamage(playerId, bullet) {
@@ -3500,7 +3531,16 @@
 
                 let killerBounty = null;
                 const isValidKillOpponent = killerId && killerId !== this.playerId;
-                if (isValidKillOpponent) {
+
+                // Check if killer is an AI - AI gains player's bounty
+                if (killerId && killerId.startsWith('ai-')) {
+                    const aiId = parseInt(killerId.split('-')[1]);
+                    const killerAI = this.aiShips.find(ai => ai.id === aiId);
+                    if (killerAI) {
+                        killerAI.bounty += victimBounty;
+                        killerBounty = killerAI.bounty;
+                    }
+                } else if (isValidKillOpponent) {
                     const currentKillerBounty = this.getPlayerBounty(killerId);
                     const bonus = Number.isFinite(this.killBountyBonus) ? this.killBountyBonus : 0;
                     const base = Number.isFinite(currentKillerBounty) ? currentKillerBounty : 0;
@@ -3764,6 +3804,33 @@
                             bombType,
                             isMine
                         });
+                    }
+                }
+
+                // Damage AI ships
+                for (const ai of this.aiShips) {
+                    if (!ai.ship || !ai.ship.alive) continue;
+
+                    const dx = ai.ship.pos.x - x;
+                    const dy = ai.ship.pos.y - y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < radius && !this.isInSafeZone(ai.ship.pos.x, ai.ship.pos.y)) {
+                        const damageMult = 1 - (distance / radius);
+                        const finalDamage = Math.max(1, Math.floor(baseDamage * damageMult));
+
+                        ai.ship.energy = Math.max(0, ai.ship.energy - finalDamage);
+
+                        if (ai.ship.energy <= 0) {
+                            ai.ship.alive = false;
+                            ai.ship.die();
+                            console.log(`AI ship "${ai.name}" destroyed by bomb!`);
+                            setTimeout(() => {
+                                if (this.aiShips.includes(ai)) {
+                                    this.respawnAIShip(ai);
+                                }
+                            }, 3000);
+                        }
                     }
                 }
             }
@@ -4056,8 +4123,18 @@
                 ship.alive = true;
                 const controller = new AIController(ship, this);
 
-                this.aiShips.push({ ship, controller });
-                console.log(`AI ship spawned at (${Math.round(spawnX)}, ${Math.round(spawnY)})`);
+                const aiId = this.aiShips.length + 1;
+                const ai = {
+                    ship,
+                    controller,
+                    id: aiId,
+                    name: this.getRandomBotName(),
+                    bounty: 50,
+                    bountyTimer: 0
+                };
+
+                this.aiShips.push(ai);
+                console.log(`AI ship "${ai.name}" spawned at (${Math.round(spawnX)}, ${Math.round(spawnY)})`);
 
                 // Update status
                 const statusEl = document.getElementById('aiStatus');
@@ -4065,7 +4142,45 @@
                     statusEl.textContent = `${this.aiShips.length} AI bot(s) active`;
                 }
 
-                return { ship, controller };
+                return ai;
+            }
+
+            getRandomBotName() {
+                // 90s SubSpace-authentic toxic name pool
+                const namePool = [
+                    // EZ / Humiliation Tier
+                    'EZMODE', '2EZ', 'EZPWN', 'EZ-PWND', 'EZ2WIN', 'GG2EZ', 'EZLOL', '2EZGG',
+                    // PWN / Dominance Tier
+                    'PWNED', 'PWND', 'PWNER', 'PWND-U', 'PWNAGE', 'OWNED', 'OWNR', 'UOWNED',
+                    // Classic 90s Aggro
+                    'Static', 'Ruin', 'Viper', 'Shade', 'Torque', 'Flare', 'Vector', 'Fury', 'Crash', 'Pulse',
+                    // "Real Player" Tier
+                    'Zeph', 'Morph', 'Nexus', 'Spectre', 'Khan', 'RavenX', 'Stryke', 'Halo', 'Ion', 'Drift',
+                    // Dirty Psychological Combos
+                    'EZMODE-PWND', '2EZ-OWNED', 'GG-EZMODE', 'PWND-AGAIN', 'EZMODE-X', 'EZMODE-1999', 'PWNED-LOL'
+                ];
+
+                const baseName = namePool[Math.floor(Math.random() * namePool.length)];
+
+                // Random case mutation for extra psychological damage
+                if (Math.random() < 0.4) {
+                    return this.mutateCasing(baseName);
+                }
+                return baseName;
+            }
+
+            mutateCasing(name) {
+                // Randomly mutate casing SubSpace-style
+                let result = '';
+                for (let i = 0; i < name.length; i++) {
+                    const char = name[i];
+                    if (Math.random() < 0.5) {
+                        result += char.toUpperCase();
+                    } else {
+                        result += char.toLowerCase();
+                    }
+                }
+                return result;
             }
 
             removeAIShip(ai) {
@@ -4573,6 +4688,15 @@
                 for (const ai of this.aiShips) {
                     if (ai.ship && ai.ship.alive && this.viewport.isVisible(ai.ship)) {
                         ai.ship.draw(this.ctx, this.viewport);
+
+                        // Draw AI name[bounty] to the right of ship
+                        const screenPos = this.viewport.worldToScreen(ai.ship.pos.x, ai.ship.pos.y);
+                        this.ctx.save();
+                        this.ctx.font = '14px "Courier New", monospace';
+                        this.ctx.textAlign = 'left';
+                        this.ctx.fillStyle = '#ffffff';
+                        this.ctx.fillText(`${ai.name}[${ai.bounty}]`, screenPos.x + 25, screenPos.y + 4);
+                        this.ctx.restore();
                     }
                 }
 
@@ -5242,7 +5366,7 @@
                             if (ai.ship && ai.ship.alive && !powerUp.collected) {
                                 if (powerUp.checkCollision(ai.ship)) {
                                     powerUp.applyEffect(ai.ship);
-                                    // AI doesn't add to player bounty
+                                    ai.bounty++; // AI gains bounty from power-ups
                                 }
                             }
                         }
@@ -5350,7 +5474,7 @@
 
                             // AI bullet hitting player
                             if (this.checkBulletPlayerCollision(bullet, this.playerShip)) {
-                                this.damagePlayer(bullet.weaponLevel || 0, 'ai');
+                                this.damagePlayer(bullet.weaponLevel || 0, `ai-${ai.id}`);
                                 ai.ship.bullets.splice(i, 1);
                                 continue;
                             }
@@ -5406,6 +5530,16 @@
                                 break;
                             }
                         }
+
+                        // Check proximity to AI ships
+                        for (const ai of this.aiShips) {
+                            if (ai.ship && ai.ship.alive) {
+                                if (this.checkBombPlayerProximity(bomb, ai.ship, proximityRadius, `ai-${ai.id}`)) {
+                                    this.explodeBomb(bomb, i);
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     // Check ship-wall collisions (ships are blocked)
@@ -5457,6 +5591,17 @@
                                 messageEl.parentNode.removeChild(messageEl);
                             }
                         }, 3000);
+                    }
+
+                    // Update AI bounty timers
+                    for (const ai of this.aiShips) {
+                        if (ai.ship && ai.ship.alive) {
+                            ai.bountyTimer += deltaTime;
+                            if (ai.bountyTimer >= this.bountyInterval) {
+                                ai.bounty += this.bountyIncrease;
+                                ai.bountyTimer = 0;
+                            }
+                        }
                     }
 
                     this.updateWarpBeacons();

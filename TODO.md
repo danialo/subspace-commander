@@ -25,3 +25,4 @@
 - [x] Add AI players/bots for single-player and practice modes.
 - [ ] Display AI ship bounty above their ship (like players).
 - [ ] Add AI ship names (e.g., "Bot-1", or random names, or prompt at load).
+- [ ] Add team system (team colors, friendly fire rules, team-based objectives).
