@@ -216,6 +216,10 @@
                 <button id="multiplayerBtn" onclick="game.connectToMultiplayer()" style="background: #000; color: #0ff; border: 1px solid #0ff; padding: 5px 10px; font-family: inherit; font-size: 12px; cursor: pointer;">JOIN MULTIPLAYER</button>
                 <div id="multiplayerStatus" style="font-size: 10px; color: #888; margin-top: 5px;"></div>
             </div>
+            <div style="margin-top: 10px; border-top: 1px solid #f80; padding-top: 5px;">
+                <button id="spawnAIBtn" onclick="game.spawnAIShip()" style="background: #000; color: #f80; border: 1px solid #f80; padding: 5px 10px; font-family: inherit; font-size: 12px; cursor: pointer;">SPAWN AI BOT</button>
+                <div id="aiStatus" style="font-size: 10px; color: #888; margin-top: 5px;"></div>
+            </div>
         </div>
 
         <div class="radar" id="radar">
@@ -1075,6 +1079,540 @@
 
                 // Draw bullets
                 this.bullets.forEach(bullet => bullet.draw(ctx, viewport));
+            }
+        }
+
+        // AIController class - Controls AI ships with state machine
+        class AIController {
+            constructor(ship, game) {
+                this.ship = ship;
+                this.game = game;
+
+                // State machine
+                this.state = 'COLLECTING';
+                this.stateTimer = 0;
+                this.stateData = {};
+
+                // Perception cache (updated each frame)
+                this.perception = {
+                    nearestPowerUp: null,
+                    visibleEnemies: [],
+                    incomingBullets: [],
+                    nearbyWalls: [],
+                    nearbyBombs: [],
+                    inSafeZone: false
+                };
+
+                // Navigation
+                this.targetPosition = null;
+                this.lastTargetUpdate = 0;
+
+                // Combat
+                this.currentTarget = null;
+                this.lastFireTime = 0;
+
+                // Tuning parameters
+                this.config = {
+                    perceptionRadius: 800,
+                    attackRange: 400,
+                    evadeThreshold: 3,
+                    bulletDodgeRadius: 100,
+                    energyReserve: 200,
+                    aimLeadFactor: 0.8,
+                    aggressionRadius: 500
+                };
+            }
+
+            update(deltaTime) {
+                // Update perception
+                this.updatePerception();
+
+                // Evaluate state transitions
+                this.evaluateStateTransitions();
+
+                // Update state timer
+                this.stateTimer += deltaTime;
+
+                // Generate input based on current state
+                return this.generateInput(deltaTime);
+            }
+
+            updatePerception() {
+                const ship = this.ship;
+                const game = this.game;
+
+                // Check safe zone
+                this.perception.inSafeZone = game.isInSafeZone(ship.pos.x, ship.pos.y);
+
+                // Find nearest power-up
+                this.perception.nearestPowerUp = this.findNearestPowerUp();
+
+                // Find visible enemies
+                this.perception.visibleEnemies = this.findVisibleEnemies();
+
+                // Find incoming bullets
+                this.perception.incomingBullets = this.findIncomingBullets();
+
+                // Find nearby walls
+                this.perception.nearbyWalls = this.findNearbyWalls();
+
+                // Find nearby bombs
+                this.perception.nearbyBombs = this.findNearbyBombs();
+            }
+
+            findNearestPowerUp() {
+                const ship = this.ship;
+                const powerUps = this.game.powerUps || [];
+
+                let nearest = null;
+                let nearestDistSq = Infinity;
+
+                for (const powerUp of powerUps) {
+                    if (powerUp.collected) continue;
+
+                    const dx = powerUp.pos.x - ship.pos.x;
+                    const dy = powerUp.pos.y - ship.pos.y;
+                    const distSq = dx * dx + dy * dy;
+
+                    if (distSq < nearestDistSq) {
+                        nearestDistSq = distSq;
+                        nearest = powerUp;
+                    }
+                }
+
+                return nearest;
+            }
+
+            findVisibleEnemies() {
+                const ship = this.ship;
+                const enemies = [];
+                const radiusSq = this.config.perceptionRadius * this.config.perceptionRadius;
+
+                // Check player ship
+                if (this.game.playerShip && this.game.playerShip !== ship && this.game.playerShip.alive) {
+                    const player = this.game.playerShip;
+                    const dx = player.pos.x - ship.pos.x;
+                    const dy = player.pos.y - ship.pos.y;
+                    if (dx * dx + dy * dy < radiusSq) {
+                        enemies.push(player);
+                    }
+                }
+
+                // Check other AI ships
+                for (const ai of this.game.aiShips || []) {
+                    if (ai.ship !== ship && ai.ship.alive) {
+                        const other = ai.ship;
+                        const dx = other.pos.x - ship.pos.x;
+                        const dy = other.pos.y - ship.pos.y;
+                        if (dx * dx + dy * dy < radiusSq) {
+                            enemies.push(other);
+                        }
+                    }
+                }
+
+                return enemies;
+            }
+
+            findIncomingBullets() {
+                const ship = this.ship;
+                const incoming = [];
+                const checkRadius = this.config.bulletDodgeRadius;
+
+                const allShips = this.game.getAllShips();
+
+                for (const otherShip of allShips) {
+                    if (otherShip === ship) continue;
+
+                    for (const bullet of otherShip.bullets || []) {
+                        const dx = ship.pos.x - bullet.pos.x;
+                        const dy = ship.pos.y - bullet.pos.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+
+                        if (dist > 400) continue;
+
+                        // Dot product: positive if bullet heading toward ship
+                        const dotProduct = dx * bullet.vel.x + dy * bullet.vel.y;
+
+                        if (dotProduct > 0) {
+                            const bulletSpeedSq = bullet.vel.x * bullet.vel.x + bullet.vel.y * bullet.vel.y;
+                            if (bulletSpeedSq === 0) continue;
+
+                            const timeToClosest = dotProduct / bulletSpeedSq;
+                            const closestX = bullet.pos.x + bullet.vel.x * timeToClosest;
+                            const closestY = bullet.pos.y + bullet.vel.y * timeToClosest;
+
+                            const closestDist = Math.sqrt(
+                                (closestX - ship.pos.x) * (closestX - ship.pos.x) +
+                                (closestY - ship.pos.y) * (closestY - ship.pos.y)
+                            );
+
+                            if (closestDist < checkRadius) {
+                                incoming.push(bullet);
+                            }
+                        }
+                    }
+                }
+
+                return incoming;
+            }
+
+            findNearbyWalls() {
+                const ship = this.ship;
+                const nearby = [];
+                const checkRadiusSq = 200 * 200;
+
+                for (const wall of this.game.walls || []) {
+                    for (const brick of wall.bricks || []) {
+                        const dx = brick.x - ship.pos.x;
+                        const dy = brick.y - ship.pos.y;
+                        if (dx * dx + dy * dy < checkRadiusSq) {
+                            nearby.push(wall);
+                            break;
+                        }
+                    }
+                }
+
+                return nearby;
+            }
+
+            findNearbyBombs() {
+                const ship = this.ship;
+                const nearby = [];
+                const checkRadiusSq = 150 * 150;
+
+                for (const bomb of this.game.bombs || []) {
+                    const dx = bomb.pos.x - ship.pos.x;
+                    const dy = bomb.pos.y - ship.pos.y;
+                    if (dx * dx + dy * dy < checkRadiusSq) {
+                        nearby.push(bomb);
+                    }
+                }
+
+                return nearby;
+            }
+
+            evaluateStateTransitions() {
+                const enemies = this.perception.visibleEnemies;
+                const bullets = this.perception.incomingBullets;
+
+                switch (this.state) {
+                    case 'COLLECTING':
+                        if (enemies.length > 0) {
+                            this.currentTarget = this.selectBestTarget(enemies);
+                            this.transitionTo('ATTACKING');
+                        } else if (bullets.length >= this.config.evadeThreshold) {
+                            this.transitionTo('EVADING');
+                        }
+                        break;
+
+                    case 'ATTACKING':
+                        if (bullets.length >= this.config.evadeThreshold) {
+                            this.stateData.previousState = 'ATTACKING';
+                            this.transitionTo('EVADING');
+                        } else if (!this.isTargetValid()) {
+                            this.currentTarget = null;
+                            this.transitionTo('COLLECTING');
+                        }
+                        break;
+
+                    case 'EVADING':
+                        if (bullets.length < this.config.evadeThreshold && this.stateTimer > 1.0) {
+                            const returnState = this.stateData.previousState || 'COLLECTING';
+                            this.transitionTo(returnState);
+                        }
+                        break;
+                }
+            }
+
+            transitionTo(newState) {
+                this.state = newState;
+                this.stateTimer = 0;
+                this.stateData = {};
+            }
+
+            selectBestTarget(enemies) {
+                let best = null;
+                let bestScore = -Infinity;
+
+                for (const enemy of enemies) {
+                    const dx = enemy.pos.x - this.ship.pos.x;
+                    const dy = enemy.pos.y - this.ship.pos.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    const healthScore = (enemy.maxEnergy - enemy.energy) / enemy.maxEnergy;
+                    const distanceScore = 1 - (distance / this.config.perceptionRadius);
+                    const score = distanceScore * 0.7 + healthScore * 0.3;
+
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = enemy;
+                    }
+                }
+
+                return best;
+            }
+
+            isTargetValid() {
+                const target = this.currentTarget;
+                if (!target || !target.alive) return false;
+
+                const dx = target.pos.x - this.ship.pos.x;
+                const dy = target.pos.y - this.ship.pos.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                return dist < this.config.perceptionRadius * 1.2;
+            }
+
+            generateInput(deltaTime) {
+                const input = {
+                    left: false, right: false, thrust: false, reverse: false,
+                    brake: false, boost: false, fire: false, bomb: false,
+                    deployMine: false, deployWall: false, burst: false
+                };
+
+                // Navigate out of safe zone if in it
+                if (this.perception.inSafeZone) {
+                    return this.navigateOutOfSafeZone(input);
+                }
+
+                switch (this.state) {
+                    case 'COLLECTING':
+                        return this.generateCollectingInput(input, deltaTime);
+                    case 'ATTACKING':
+                        return this.generateAttackingInput(input, deltaTime);
+                    case 'EVADING':
+                        return this.generateEvadingInput(input, deltaTime);
+                }
+
+                return input;
+            }
+
+            navigateOutOfSafeZone(input) {
+                // Move away from safe zone center
+                const safeZone = this.game.safeZone;
+                const dx = this.ship.pos.x - safeZone.x;
+                const dy = this.ship.pos.y - safeZone.y;
+
+                // Navigate to a point outside safe zone
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const targetX = safeZone.x + (dx / dist) * (safeZone.radius + 100);
+                const targetY = safeZone.y + (dy / dist) * (safeZone.radius + 100);
+
+                const steering = this.getSteeringToward(targetX, targetY);
+                input.left = steering.turnLeft;
+                input.right = steering.turnRight;
+                input.thrust = steering.shouldThrust;
+
+                return input;
+            }
+
+            generateCollectingInput(input, deltaTime) {
+                const powerUp = this.perception.nearestPowerUp;
+
+                if (powerUp) {
+                    const steering = this.getSteeringToward(powerUp.pos.x, powerUp.pos.y);
+                    input.left = steering.turnLeft;
+                    input.right = steering.turnRight;
+                    input.thrust = steering.shouldThrust;
+
+                    // Boost if power-up is far and we have energy
+                    if (steering.distance > 300 && this.ship.energy > 400) {
+                        input.boost = true;
+                    }
+                } else {
+                    // Wander
+                    this.ensureWanderTarget();
+                    const steering = this.getSteeringToward(this.targetPosition.x, this.targetPosition.y);
+                    input.left = steering.turnLeft;
+                    input.right = steering.turnRight;
+                    input.thrust = steering.shouldThrust;
+                }
+
+                return input;
+            }
+
+            generateAttackingInput(input, deltaTime) {
+                const target = this.currentTarget;
+                if (!target) return input;
+
+                // Lead the target
+                const leadPos = this.getLeadPosition(target);
+                const steering = this.getSteeringToward(leadPos.x, leadPos.y);
+
+                input.left = steering.turnLeft;
+                input.right = steering.turnRight;
+
+                // Aggressive pursuit
+                input.thrust = steering.distance > 100;
+
+                // Boost when chasing
+                if (steering.distance > 200 && this.ship.energy > this.config.energyReserve) {
+                    input.boost = true;
+                }
+
+                // Fire when well-aligned and have energy
+                const aimTolerance = 0.15;
+                if (Math.abs(steering.angleDiff) < aimTolerance &&
+                    this.ship.energy > this.config.energyReserve &&
+                    steering.distance < 600) {
+                    input.fire = true;
+                }
+
+                // Use bombs at medium range
+                if (Math.abs(steering.angleDiff) < 0.3 &&
+                    steering.distance > 150 && steering.distance < 400 &&
+                    this.ship.energy > 500) {
+                    input.bomb = true;
+                }
+
+                return input;
+            }
+
+            generateEvadingInput(input, deltaTime) {
+                const dodgeTarget = this.getDodgeVector();
+
+                if (dodgeTarget) {
+                    const steering = this.getSteeringToward(dodgeTarget.x, dodgeTarget.y);
+                    input.left = steering.turnLeft;
+                    input.right = steering.turnRight;
+                    input.thrust = true;
+                    input.boost = this.ship.energy > 300;
+                }
+
+                // Use burst if available and surrounded
+                if (this.perception.incomingBullets.length >= 4 && this.ship.burstCount > 0) {
+                    input.burst = true;
+                }
+
+                return input;
+            }
+
+            getSteeringToward(targetX, targetY) {
+                const ship = this.ship;
+
+                const dx = targetX - ship.pos.x;
+                const dy = targetY - ship.pos.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                // Target angle (game uses sin for x, -cos for y)
+                let targetAngle = Math.atan2(dx, -dy);
+
+                // Normalize to 0-2PI
+                while (targetAngle < 0) targetAngle += Math.PI * 2;
+                while (targetAngle >= Math.PI * 2) targetAngle -= Math.PI * 2;
+
+                let currentAngle = ship.angle;
+                while (currentAngle < 0) currentAngle += Math.PI * 2;
+                while (currentAngle >= Math.PI * 2) currentAngle -= Math.PI * 2;
+
+                let angleDiff = targetAngle - currentAngle;
+
+                // Normalize to -PI to PI
+                while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+                const turnLeft = angleDiff < -0.05;
+                const turnRight = angleDiff > 0.05;
+                const shouldThrust = Math.abs(angleDiff) < Math.PI / 3;
+
+                return { turnLeft, turnRight, shouldThrust, angleDiff, distance };
+            }
+
+            getLeadPosition(target) {
+                const ship = this.ship;
+                const bulletSpeed = 600;
+
+                const dx = target.pos.x - ship.pos.x;
+                const dy = target.pos.y - ship.pos.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                const bulletTime = distance / bulletSpeed;
+
+                const predictedX = target.pos.x + target.vel.x * bulletTime * this.config.aimLeadFactor;
+                const predictedY = target.pos.y + target.vel.y * bulletTime * this.config.aimLeadFactor;
+
+                return { x: predictedX, y: predictedY };
+            }
+
+            getDodgeVector() {
+                const ship = this.ship;
+                const bullets = this.perception.incomingBullets;
+
+                if (bullets.length === 0) return null;
+
+                let avgDx = 0, avgDy = 0;
+                for (const bullet of bullets) {
+                    avgDx += bullet.vel.x;
+                    avgDy += bullet.vel.y;
+                }
+
+                // Perpendicular vector
+                const perpX = -avgDy;
+                const perpY = avgDx;
+                const len = Math.sqrt(perpX * perpX + perpY * perpY);
+
+                if (len === 0) return null;
+
+                // Choose side away from bullet cluster
+                const bulletCenterX = bullets.reduce((sum, b) => sum + b.pos.x, 0) / bullets.length;
+                const bulletCenterY = bullets.reduce((sum, b) => sum + b.pos.y, 0) / bullets.length;
+
+                const toCenter = {
+                    x: bulletCenterX - ship.pos.x,
+                    y: bulletCenterY - ship.pos.y
+                };
+
+                const dot = perpX * toCenter.x + perpY * toCenter.y;
+                const sign = dot > 0 ? -1 : 1;
+
+                return {
+                    x: ship.pos.x + sign * perpX / len * 200,
+                    y: ship.pos.y + sign * perpY / len * 200
+                };
+            }
+
+            ensureWanderTarget() {
+                const now = Date.now();
+
+                // Update target every 3 seconds or if close to target
+                if (!this.targetPosition || now - this.lastTargetUpdate > 3000) {
+                    this.pickNewWanderTarget();
+                } else {
+                    const dx = this.targetPosition.x - this.ship.pos.x;
+                    const dy = this.targetPosition.y - this.ship.pos.y;
+                    if (dx * dx + dy * dy < 100 * 100) {
+                        this.pickNewWanderTarget();
+                    }
+                }
+            }
+
+            pickNewWanderTarget() {
+                // Pick random point in playable area, avoiding safe zone
+                const margin = 200;
+                const minX = margin;
+                const maxX = 8000 - margin;
+                const minY = 120 + margin;
+                const maxY = 5200 - 120 - margin;
+
+                const safeZone = this.game.safeZone;
+                const avoidRadius = safeZone.radius + 150; // Stay well clear
+
+                let attempts = 0;
+                let x, y;
+                do {
+                    x = minX + Math.random() * (maxX - minX);
+                    y = minY + Math.random() * (maxY - minY);
+                    attempts++;
+
+                    const dx = x - safeZone.x;
+                    const dy = y - safeZone.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist > avoidRadius) break;
+                } while (attempts < 20);
+
+                this.targetPosition = { x, y };
+                this.lastTargetUpdate = Date.now();
             }
         }
 
@@ -2083,6 +2621,15 @@
                         }
                     });
                 }
+
+                // Draw AI ships (orange/red color)
+                if (game.aiShips) {
+                    game.aiShips.forEach(ai => {
+                        if (ai.ship && ai.ship.pos && ai.ship.alive) {
+                            this.drawPlayer(ai.ship.pos.x, ai.ship.pos.y, '#ff6600', false);
+                        }
+                    });
+                }
             }
         }
 
@@ -2200,6 +2747,10 @@
 
                 // Walls system
                 this.walls = [];
+
+                // AI system
+                this.aiShips = [];
+                this.aiEnabled = true;
 
                 // Warp system
                 this.warpBeacons = new Map();
@@ -2801,6 +3352,75 @@
                 });
             }
 
+            damageAIShip(ai, bullet) {
+                const ship = ai.ship;
+                if (!ship || !ship.alive) return;
+
+                // Check safe zone
+                if (this.isInSafeZone(ship.pos.x, ship.pos.y)) return;
+
+                // Check shield
+                if (ship.isShieldActive && ship.isShieldActive()) return;
+
+                const bulletLevel = bullet.weaponLevel || bullet.upgradeLevel || 0;
+                const damage = this.getBulletDamage(Math.min(Math.max(bulletLevel, 0), 2));
+
+                ship.energy = Math.max(0, ship.energy - damage);
+
+                if (ship.energy <= 0) {
+                    ship.alive = false;
+                    ship.die();
+                    console.log('AI ship destroyed!');
+                    // Respawn AI after delay
+                    setTimeout(() => {
+                        if (this.aiShips.includes(ai)) {
+                            this.respawnAIShip(ai);
+                        }
+                    }, 3000);
+                }
+            }
+
+            respawnAIShip(ai) {
+                // Reset ship state
+                const margin = 300;
+                let spawnX, spawnY;
+                let attempts = 0;
+
+                do {
+                    spawnX = margin + Math.random() * (8000 - 2 * margin);
+                    spawnY = 120 + margin + Math.random() * (5200 - 240 - 2 * margin);
+                    attempts++;
+
+                    const dxPlayer = spawnX - this.playerShip.pos.x;
+                    const dyPlayer = spawnY - this.playerShip.pos.y;
+                    const distPlayer = Math.sqrt(dxPlayer * dxPlayer + dyPlayer * dyPlayer);
+
+                    const dxSafe = spawnX - this.safeZone.x;
+                    const dySafe = spawnY - this.safeZone.y;
+                    const distSafe = Math.sqrt(dxSafe * dxSafe + dySafe * dySafe);
+
+                    if (distPlayer > 500 && distSafe > this.safeZone.radius + 100) {
+                        break;
+                    }
+                } while (attempts < 20);
+
+                ai.ship.pos.x = spawnX;
+                ai.ship.pos.y = spawnY;
+                ai.ship.vel.x = 0;
+                ai.ship.vel.y = 0;
+                ai.ship.angle = Math.random() * Math.PI * 2;
+                ai.ship.energy = ai.ship.maxEnergy;
+                ai.ship.alive = true;
+                ai.ship.bullets = [];
+                ai.ship.resetUpgrades();
+
+                ai.controller.state = 'COLLECTING';
+                ai.controller.stateTimer = 0;
+                ai.controller.currentTarget = null;
+
+                console.log(`AI ship respawned at (${Math.round(spawnX)}, ${Math.round(spawnY)})`);
+            }
+
             sendPlayerDamage(playerId, bullet) {
                 if (!this.isMultiplayer) {
                     return;
@@ -3386,6 +4006,13 @@
                 if (this.playerShip) {
                     ships.push(this.playerShip);
                 }
+                // Include AI ships
+                for (const ai of this.aiShips || []) {
+                    if (ai.ship) {
+                        ships.push(ai.ship);
+                    }
+                }
+                // Include multiplayer ships
                 if (this.otherPlayers && this.otherPlayers.size) {
                     for (const ship of this.otherPlayers.values()) {
                         if (ship) {
@@ -3394,6 +4021,58 @@
                     }
                 }
                 return ships;
+            }
+
+            spawnAIShip() {
+                // Spawn away from player and safe zone
+                const margin = 300;
+                const safeZone = this.safeZone;
+
+                let spawnX, spawnY;
+                let attempts = 0;
+
+                do {
+                    spawnX = margin + Math.random() * (8000 - 2 * margin);
+                    spawnY = 120 + margin + Math.random() * (5200 - 240 - 2 * margin);
+                    attempts++;
+
+                    // Check distance from player
+                    const dxPlayer = spawnX - this.playerShip.pos.x;
+                    const dyPlayer = spawnY - this.playerShip.pos.y;
+                    const distPlayer = Math.sqrt(dxPlayer * dxPlayer + dyPlayer * dyPlayer);
+
+                    // Check distance from safe zone
+                    const dxSafe = spawnX - safeZone.x;
+                    const dySafe = spawnY - safeZone.y;
+                    const distSafe = Math.sqrt(dxSafe * dxSafe + dySafe * dySafe);
+
+                    // Valid spawn: far from player and outside safe zone
+                    if (distPlayer > 500 && distSafe > safeZone.radius + 100) {
+                        break;
+                    }
+                } while (attempts < 20);
+
+                const ship = new Ship(spawnX, spawnY, false);
+                ship.alive = true;
+                const controller = new AIController(ship, this);
+
+                this.aiShips.push({ ship, controller });
+                console.log(`AI ship spawned at (${Math.round(spawnX)}, ${Math.round(spawnY)})`);
+
+                // Update status
+                const statusEl = document.getElementById('aiStatus');
+                if (statusEl) {
+                    statusEl.textContent = `${this.aiShips.length} AI bot(s) active`;
+                }
+
+                return { ship, controller };
+            }
+
+            removeAIShip(ai) {
+                const index = this.aiShips.indexOf(ai);
+                if (index > -1) {
+                    this.aiShips.splice(index, 1);
+                }
             }
 
             setupEventListeners() {
@@ -3887,6 +4566,13 @@
                         if (player && this.viewport.isVisible(player)) {
                             player.draw(this.ctx, this.viewport);
                         }
+                    }
+                }
+
+                // Draw AI ships
+                for (const ai of this.aiShips) {
+                    if (ai.ship && ai.ship.alive && this.viewport.isVisible(ai.ship)) {
+                        ai.ship.draw(this.ctx, this.viewport);
                     }
                 }
 
@@ -4523,6 +5209,16 @@
                         this.broadcastPlayerState(isInputActive);
                     }
 
+                    // Update AI ships
+                    for (const ai of this.aiShips) {
+                        if (ai.ship && ai.ship.alive) {
+                            const aiInput = ai.controller.update(deltaTime);
+                            const aiInSafeZone = this.isInSafeZone(ai.ship.pos.x, ai.ship.pos.y);
+                            const aiBrakeFactor = aiInSafeZone ? 0.5 : 0.95;
+                            ai.ship.processInput(aiInput, deltaTime, { brakeFactor: aiBrakeFactor });
+                        }
+                    }
+
                     const allShips = this.getAllShips();
 
                     for (const ship of allShips) {
@@ -4539,6 +5235,16 @@
                             this.powerUpsCollected++; // Increment bounty counter
                             this.updateLocalBounty();
                             this.showPowerUpMessage(powerUp.config); // Show announcement
+                        }
+
+                        // Check collision with AI ships
+                        for (const ai of this.aiShips) {
+                            if (ai.ship && ai.ship.alive && !powerUp.collected) {
+                                if (powerUp.checkCollision(ai.ship)) {
+                                    powerUp.applyEffect(ai.ship);
+                                    // AI doesn't add to player bounty
+                                }
+                            }
                         }
                     }
 
@@ -4617,6 +5323,44 @@
                                     this.handleBulletSelfDamage(bullet, otherPlayer);
                                     this.sendPlayerDamage(playerId, bullet);
                                     ship.bullets.splice(i, 1);
+                                    break;
+                                }
+                            }
+
+                            // Check player bullets hitting AI ships
+                            if (isLocalBullet) {
+                                for (const ai of this.aiShips) {
+                                    if (!ai.ship || !ai.ship.alive) continue;
+                                    if (this.checkBulletPlayerCollision(bullet, ai.ship)) {
+                                        this.damageAIShip(ai, bullet);
+                                        ship.bullets.splice(i, 1);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Check AI bullets hitting player
+                    for (const ai of this.aiShips) {
+                        if (!ai.ship || !ai.ship.alive) continue;
+                        for (let i = ai.ship.bullets.length - 1; i >= 0; i--) {
+                            const bullet = ai.ship.bullets[i];
+                            if (!bullet) continue;
+
+                            // AI bullet hitting player
+                            if (this.checkBulletPlayerCollision(bullet, this.playerShip)) {
+                                this.damagePlayer(bullet.weaponLevel || 0, 'ai');
+                                ai.ship.bullets.splice(i, 1);
+                                continue;
+                            }
+
+                            // AI bullet hitting other AI
+                            for (const otherAi of this.aiShips) {
+                                if (otherAi === ai || !otherAi.ship || !otherAi.ship.alive) continue;
+                                if (this.checkBulletPlayerCollision(bullet, otherAi.ship)) {
+                                    this.damageAIShip(otherAi, bullet);
+                                    ai.ship.bullets.splice(i, 1);
                                     break;
                                 }
                             }

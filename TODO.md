@@ -22,4 +22,6 @@
 - [x] Investigate afterburner energy consumption (Shift) and recharge interaction.
 - [ ] Fix max level caps for all ship buffs/power-ups.
 - [x] Lock down safe zone (no shooting, bombs, or drops inside).
-- [ ] Add AI players/bots for single-player and practice modes.
+- [x] Add AI players/bots for single-player and practice modes.
+- [ ] Display AI ship bounty above their ship (like players).
+- [ ] Add AI ship names (e.g., "Bot-1", or random names, or prompt at load).
